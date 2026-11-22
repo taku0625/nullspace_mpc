@@ -14,7 +14,7 @@ import pandas as pd
 import yaml
 
 
-CONTROLLERS = ("nullspace_mpc", "mppi_3d_a", "mppi_3d_b", "mppi_4d", "mppi_h")
+CONTROLLERS = ("nullspace_mpc", "mppi_3d_a", "mppi_3d_b", "mppi_4d", "mppi_h", "mppi_unicycle")
 WORLDS = ("maze", "empty_garden", "cylinder_garden")
 
 

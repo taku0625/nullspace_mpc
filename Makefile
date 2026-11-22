@@ -16,7 +16,7 @@ docker_run = docker run --rm -it --network host --ipc host $(X11_ARGS) \
 
 .PHONY: build clean install_deps setup_docker_cpu setup_docker_gpu run_docker_cpu run_docker_gpu \
   record view_rosbag gazebo_world mapping gmapping navigation navigation_nullspace_mpc \
-  navigation_nullspace_mpc_lite navigation_mppi eval_demo_nullspace_mpc eval_demo_mppi \
+  navigation_nullspace_mpc_lite navigation_mppi navigation_mppi_unicycle eval_demo_nullspace_mpc eval_demo_mppi \
   eval_ten_small eval_ten_large
 
 build:
@@ -60,6 +60,9 @@ navigation_nullspace_mpc_lite:
 
 navigation_mppi:
 	$(launch) navigation.launch.py local_planner:=mppi_h $(LAUNCH_ARGS)
+
+navigation_mppi_unicycle:
+	$(launch) navigation.launch.py local_planner:=mppi_unicycle $(LAUNCH_ARGS)
 
 eval_demo_nullspace_mpc:
 	$(evaluate) --agenda_yaml_path "$(AGENDA)" --controller nullspace_mpc

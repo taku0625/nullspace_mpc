@@ -20,6 +20,7 @@
   <exec_depend>mppi_3d</exec_depend>
   <exec_depend>mppi_4d</exec_depend>
   <exec_depend>mppi_h</exec_depend>
+  <exec_depend>mppi_unicycle</exec_depend>
   <exec_depend>nav2_costmap_2d</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

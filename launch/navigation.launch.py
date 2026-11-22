@@ -15,6 +15,7 @@ CONTROLLERS = {
     "mppi_3d_b": "mppi_3d",
     "mppi_4d": "mppi_4d",
     "mppi_h": "mppi_h",
+    "mppi_unicycle": "mppi_unicycle",
 }
 MAPS = ["maze", "empty_garden", "cylinder_garden"]
 
@@ -33,7 +34,7 @@ def launch_navigation(context):
     scenario = LaunchConfiguration("scenario_config_path").perform(context)
 
     controller_args = {"use_sim_time": "true"}
-    local_costmap_params = [str(share / "config" / "nav2.yaml")]
+    local_costmap_params = [str(share / "config" / "nav2.yaml"), {"autostart_node": True}]
     if controller == "nullspace_mpc":
         controller_args["controller_mode"] = LaunchConfiguration("controller_mode")
         local_costmap_params.append({
@@ -76,7 +77,7 @@ def launch_navigation(context):
             parameters=[{
                 "use_sim_time": True,
                 "autostart": True,
-                "node_names": ["map_server", "planner_server", "local_costmap/local_costmap"],
+                "node_names": ["map_server", "planner_server"],
             }],
             output="screen",
         ),

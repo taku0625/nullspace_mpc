@@ -49,9 +49,12 @@ truth for localization.
 
 - Run the reduced-computation controller with `controller_mode:=lite`.
 - Set `local_planner:=mppi_h` for the hybrid MPPI baseline.
-  `mppi_3d_a`, `mppi_3d_b` and `mppi_4d` are also available.
+  `mppi_3d_a`, `mppi_3d_b`, `mppi_4d` and `mppi_unicycle` are also available.
 - Select `gazebo_world_name:=maze`, `empty_garden` or `cylinder_garden`.
 - For a headless run, use `open_rviz:=false show_gazebo_gui:=false gazebo_headless:=true`.
+
+The unicycle mode uses `(v, omega)` and keeps the existing Gazebo and
+evaluation interfaces. [Unicycle MPPI settings](src/control/mppi_unicycle/README.md)
 
 Use `gazebo_world.launch.py` for manual joystick operation and
 `mapping.launch.py` for SLAM Toolbox. View ROS 2 bag data with
@@ -78,7 +81,7 @@ ros2 run nullspace_mpc_bringup run_evaluation.py \
   --agenda_yaml_path data/eval_demo/agenda.yaml --controller nullspace_mpc
 ```
 
-Use `--controller mppi_h` for the baseline or `--headless` to omit the GUIs.
+Use `--controller mppi_unicycle` or `--controller mppi_h` for a baseline or `--headless` to omit the GUIs.
 The demo agenda writes each episode and the summary CSV to `./result/`.
 
 ## Citation

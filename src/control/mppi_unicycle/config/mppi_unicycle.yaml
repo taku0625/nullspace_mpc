@@ -1,0 +1,13 @@
+mppi_unicycle:
+  ros__parameters:
+    control_interval: 0.05
+    prediction_step: 0.05
+    prediction_steps: 30
+    samples: 1000
+    sigma: [0.5, 0.5]
+    lambda: 200.0
+    max_linear_speed: 2.0
+    max_angular_speed: 1.57
+    reference_speed: 1.2
+    xy_goal_tolerance: 0.15
+    yaw_goal_tolerance: 0.15
