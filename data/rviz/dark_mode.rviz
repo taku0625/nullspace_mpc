@@ -1,681 +1,467 @@
 Panels:
-  - Class: rviz/Displays
-    Help Height: 78
-    Name: Displays
-    Property Tree Widget:
-      Expanded:
-        - /LaserScan1
-        - /Local Cost Map1/Position1
-        - /Local Cost Map1/Orientation1
-        - /Global Cost Map1
-        - /Global Cost Map1/Position1
-        - /[analyzer] Text1
-        - /Velocity1
-        - /Yaw Rate1
-        - /Vehicle Trajectory1
-        - /cmd_vel arrow1
-        - /CalcTime ms1
-        - /Controller Name1
-        - /vx_variance1
-        - /vy_variance1
-        - /yawrate_variance1
-      Splitter Ratio: 0.5661971569061279
-    Tree Height: 1147
-  - Class: rviz/Selection
-    Name: Selection
-  - Class: rviz/Tool Properties
+- Class: rviz_common/Displays
+  Help Height: 78
+  Name: Displays
+  Property Tree Widget:
     Expanded:
-      - /2D Pose Estimate1
-      - /2D Nav Goal1
-      - /Publish Point1
-    Name: Tool Properties
-    Splitter Ratio: 0.5886790156364441
-  - Class: rviz/Views
-    Expanded:
-      - /Current View1
-    Name: Views
-    Splitter Ratio: 0.5
-  - Class: rviz/Time
-    Name: Time
-    SyncMode: 0
-    SyncSource: LaserScan
+    - /LaserScan1
+    - /Local Cost Map1/Position1
+    - /Local Cost Map1/Orientation1
+    - /Global Cost Map1
+    - /Global Cost Map1/Position1
+    - /[analyzer] Text1
+    - /Velocity1
+    - /Yaw Rate1
+    - /Vehicle Trajectory1
+    - /cmd_vel arrow1
+    - /CalcTime ms1
+    - /Controller Name1
+    - /vx_variance1
+    - /vy_variance1
+    - /yawrate_variance1
+    Splitter Ratio: 0.5661971569061279
+  Tree Height: 1147
+- Class: rviz_common/Selection
+  Name: Selection
+- Class: rviz_common/Tool Properties
+  Expanded:
+  - /2D Pose Estimate1
+  - /2D Nav Goal1
+  - /Publish Point1
+  Name: Tool Properties
+  Splitter Ratio: 0.5886790156364441
+- Class: rviz_common/Views
+  Expanded:
+  - /Current View1
+  Name: Views
+  Splitter Ratio: 0.5
+- Class: rviz_common/Time
+  Name: Time
+  SyncMode: 0
+  SyncSource: LaserScan
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
   toolButtonStyle: 2
 Visualization Manager:
-  Class: ""
+  Class: ''
   Displays:
-    - Alpha: 0.5
-      Cell Size: 1
-      Class: rviz/Grid
-      Color: 160; 160; 164
-      Enabled: true
-      Line Style:
-        Line Width: 0.029999999329447746
-        Value: Lines
-      Name: Grid
-      Normal Cell Count: 0
-      Offset:
-        X: 0
-        Y: 0
-        Z: 0
-      Plane: XY
-      Plane Cell Count: 10
-      Reference Frame: <Fixed Frame>
-      Value: true
-    - Alpha: 1
-      Class: rviz/RobotModel
-      Collision Enabled: false
-      Enabled: true
-      Links:
-        All Links Enabled: true
-        Expand Joint Details: false
-        Expand Link Details: false
-        Expand Tree: false
-        Link Tree Style: Links in Alphabetic Order
-        base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        body:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_left_wheel_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_left_wheel_rotor:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_left_wheel_steer:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_left_wheel_suspension:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_right_wheel_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_right_wheel_rotor:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_right_wheel_steer:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        front_right_wheel_suspension:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        laser_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_left_wheel_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_left_wheel_rotor:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_left_wheel_steer:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_left_wheel_suspension:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_right_wheel_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_right_wheel_rotor:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_right_wheel_steer:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        rear_right_wheel_suspension:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-      Name: RobotModel
-      Robot Description: robot_description
-      TF Prefix: ""
-      Update Interval: 0
-      Value: true
-      Visual Enabled: true
-    - Class: rviz/TF
-      Enabled: false
-      Filter (blacklist): ""
-      Filter (whitelist): ""
-      Frame Timeout: 15
-      Frames:
-        All Enabled: true
-      Marker Alpha: 1
-      Marker Scale: 1
-      Name: TF
-      Show Arrows: true
-      Show Axes: true
-      Show Names: true
-      Tree:
-        {}
-      Update Interval: 0
-      Value: false
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz/LaserScan
-      Color: 255; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Min Color: 0; 0; 0
-      Name: LaserScan
-      Position Transformer: XYZ
-      Queue Size: 10
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.05000000074505806
-      Style: Flat Squares
-      Topic: /laser_link/scan
-      Unreliable: false
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
-    - Angle Tolerance: 0.10000000149011612
-      Class: rviz/Odometry
-      Covariance:
-        Orientation:
-          Alpha: 0.5
-          Color: 255; 255; 127
-          Color Style: Unique
-          Frame: Local
-          Offset: 1
-          Scale: 1
-          Value: true
-        Position:
-          Alpha: 0.30000001192092896
-          Color: 204; 51; 204
-          Scale: 1
-          Value: true
-        Value: true
-      Enabled: false
-      Keep: 100
-      Name: Odometry
-      Position Tolerance: 0.10000000149011612
-      Queue Size: 10
-      Shape:
+  - Alpha: 0.5
+    Cell Size: 1
+    Class: rviz_default_plugins/Grid
+    Color: 160; 160; 164
+    Enabled: true
+    Line Style:
+      Line Width: 0.029999999329447746
+      Value: Lines
+    Name: Grid
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 10
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Alpha: 1
+    Class: rviz_default_plugins/RobotModel
+    Collision Enabled: false
+    Enabled: true
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+      base_link:
         Alpha: 1
-        Axes Length: 1
-        Axes Radius: 0.10000000149011612
-        Color: 255; 25; 0
-        Head Length: 0.30000001192092896
-        Head Radius: 0.10000000149011612
-        Shaft Length: 1
-        Shaft Radius: 0.05000000074505806
-        Value: Arrow
-      Topic: /odom
-      Unreliable: false
-      Value: false
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /goal_pose_marker
-      Name: Goal Pose
-      Namespaces:
-        goal_pose: true
-      Queue Size: 100
-      Value: true
-    - Alpha: 0.699999988079071
-      Class: rviz/Map
-      Color Scheme: map
-      Draw Behind: false
-      Enabled: false
-      Name: Map
-      Topic: /map
-      Unreliable: false
-      Use Timestamp: false
-      Value: false
-    - Alpha: 0.4000000059604645
-      Class: rviz/Map
-      Color Scheme: costmap
-      Draw Behind: false
-      Enabled: false
-      Name: Local Cost Map
-      Topic: /move_base/local_costmap/costmap
-      Unreliable: false
-      Use Timestamp: false
-      Value: false
-    - Alpha: 0.5
-      Class: rviz/Map
-      Color Scheme: raw
-      Draw Behind: false
-      Enabled: true
-      Name: Global Cost Map
-      Topic: /move_base/global_costmap/costmap
-      Unreliable: false
-      Use Timestamp: false
-      Value: true
-    - Alpha: 0.5
-      Autocompute Intensity Bounds: true
-      Class: grid_map_rviz_plugin/GridMap
-      Color: 200; 200; 200
-      Color Layer: distance_error
-      Color Transformer: GridMapLayer
-      Enabled: false
-      Height Layer: distance_error
-      Height Transformer: Flat
-      History Length: 1
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: 10
-      Min Color: 0; 0; 0
-      Min Intensity: 0
-      Name: Distance Error Map
-      Show Grid Lines: false
-      Topic: /distance_error_map
-      Unreliable: false
-      Use Rainbow: true
-      Value: false
-    - Alpha: 0.5
-      Autocompute Intensity Bounds: true
-      Class: grid_map_rviz_plugin/GridMap
-      Color: 200; 200; 200
-      Color Layer: ref_yaw
-      Color Transformer: GridMapLayer
-      Enabled: false
-      Height Layer: ref_yaw
-      Height Transformer: Flat
-      History Length: 1
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: 10
-      Min Color: 0; 0; 0
-      Min Intensity: 0
-      Name: Ref Yaw Map
-      Show Grid Lines: false
-      Topic: /ref_yaw_map
-      Unreliable: false
-      Use Rainbow: true
-      Value: false
-    - Alpha: 1
-      Buffer Length: 1
-      Class: rviz/Path
-      Color: 40; 240; 50
-      Enabled: true
-      Head Diameter: 0.30000001192092896
-      Head Length: 0.20000000298023224
-      Length: 0.30000001192092896
-      Line Style: Billboards
-      Line Width: 0.07500000298023224
-      Name: Global Path
-      Offset:
-        X: 0
-        Y: 0
-        Z: 0
-      Pose Color: 255; 85; 255
-      Pose Style: None
-      Queue Size: 10
-      Radius: 0.029999999329447746
-      Shaft Diameter: 0.10000000149011612
-      Shaft Length: 0.10000000149011612
-      Topic: /move_base/NavfnROS/plan
-      Unreliable: false
-      Value: true
-    - Alpha: 1
-      Buffer Length: 1
-      Class: rviz/Path
-      Color: 180; 0; 180
-      Enabled: true
-      Head Diameter: 0.30000001192092896
-      Head Length: 0.20000000298023224
-      Length: 0.30000001192092896
-      Line Style: Billboards
-      Line Width: 0.02500000037252903
-      Name: Local Path
-      Offset:
-        X: 0
-        Y: 0
-        Z: 0.800000011920929
-      Pose Color: 255; 85; 255
-      Pose Style: None
-      Queue Size: 10
-      Radius: 0.029999999329447746
-      Shaft Diameter: 0.10000000149011612
-      Shaft Length: 0.10000000149011612
-      Topic: /move_base/DWAPlannerROS/local_plan
-      Unreliable: false
-      Value: true
-    - Alpha: 1
-      Arrow Length: 0.5
-      Axes Length: 0.30000001192092896
-      Axes Radius: 0.009999999776482582
-      Class: rviz/PoseArray
-      Color: 255; 0; 0
-      Enabled: true
-      Head Length: 0.07000000029802322
-      Head Radius: 0.029999999329447746
-      Name: TEB_Markers
-      Queue Size: 10
-      Shaft Length: 0.23000000417232513
-      Shaft Radius: 0.009999999776482582
-      Shape: Arrow (Flat)
-      Topic: /move_base/TebLocalPlannerROS/teb_poses
-      Unreliable: false
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
+        Show Axes: false
+        Show Trail: false
+      body:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
         Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Min Color: 0; 0; 0
-      Name: DWA Samples
-      Position Transformer: XYZ
-      Queue Size: 10
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.009999999776482582
-      Style: Flat Squares
-      Topic: /move_base/DWAPlannerROS/trajectory_cloud
-      Unreliable: false
-      Use Fixed Frame: true
-      Use rainbow: true
+      front_left_wheel_base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_left_wheel_rotor:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_left_wheel_steer:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_left_wheel_suspension:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_right_wheel_base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_right_wheel_rotor:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_right_wheel_steer:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      front_right_wheel_suspension:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      laser_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_left_wheel_base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_left_wheel_rotor:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_left_wheel_steer:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_left_wheel_suspension:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_right_wheel_base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_right_wheel_rotor:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_right_wheel_steer:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      rear_right_wheel_suspension:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+    Name: RobotModel
+    TF Prefix: ''
+    Update Interval: 0
+    Value: true
+    Visual Enabled: true
+    Description Source: Topic
+    Description Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /robot_description
+  - Class: rviz_default_plugins/TF
+    Enabled: false
+    Filter (blacklist): ''
+    Filter (whitelist): ''
+    Frame Timeout: 15
+    Frames:
+      All Enabled: true
+    Marker Alpha: 1
+    Marker Scale: 1
+    Name: TF
+    Show Arrows: true
+    Show Axes: true
+    Show Names: true
+    Tree: {}
+    Update Interval: 0
+    Value: false
+  - Alpha: 1
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 10
+      Min Value: -10
       Value: true
-    - Align Bottom: false
-      Background Alpha: 0.800000011920929
-      Background Color: 0; 0; 0
-      Class: jsk_rviz_plugin/OverlayText
-      Enabled: true
-      Foreground Alpha: 0.800000011920929
-      Foreground Color: 25; 255; 240
-      Invert Shadow: false
-      Name: "[analyzer] Text"
-      Overtake BG Color Properties: false
-      Overtake FG Color Properties: false
-      Overtake Position Properties: false
-      Topic: /analyzer/rviz_text
+    Axis: Z
+    Channel Name: intensity
+    Class: rviz_default_plugins/LaserScan
+    Color: 255; 255; 255
+    Color Transformer: Intensity
+    Decay Time: 0
+    Enabled: true
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Min Color: 0; 0; 0
+    Name: LaserScan
+    Position Transformer: XYZ
+    Queue Size: 10
+    Selectable: true
+    Size (Pixels): 3
+    Size (m): 0.05000000074505806
+    Style: Flat Squares
+    Unreliable: false
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /laser_link/scan
+  - Angle Tolerance: 0.10000000149011612
+    Class: rviz_default_plugins/Odometry
+    Covariance:
+      Orientation:
+        Alpha: 0.5
+        Color: 255; 255; 127
+        Color Style: Unique
+        Frame: Local
+        Offset: 1
+        Scale: 1
+        Value: true
+      Position:
+        Alpha: 0.30000001192092896
+        Color: 204; 51; 204
+        Scale: 1
+        Value: true
       Value: true
-      font: DejaVu Sans Mono
-      height: 128
-      left: 0
-      line width: 2
-      text size: 12
-      top: 0
-      width: 128
-    - Class: rviz/MarkerArray
-      Enabled: true
-      Marker Topic: /mpc_optimal_traj
-      Name: MPPI Optimal Traj
-      Namespaces:
-        optimal_trajectory: true
-      Queue Size: 100
-      Value: true
-    - Class: rviz/MarkerArray
-      Enabled: true
-      Marker Topic: /mpc_sampled_traj
-      Name: MPPI Sampled Traj
-      Namespaces:
-        sampled_trajectories: true
-      Queue Size: 100
-      Value: true
-    - Buffer length: 100
-      Class: jsk_rviz_plugin/Plotter2D
-      Enabled: true
-      Name: Velocity
-      Show Value: true
-      Topic: /analyzer/rviz_absvel
-      Value: true
-      auto color change: false
-      auto scale: true
-      background color: 0; 0; 0
-      backround alpha: 0
-      border: true
-      foreground alpha: 0.699999988079071
-      foreground color: 25; 255; 240
-      height: 100
-      left: 820
-      linewidth: 1
-      max color: 255; 0; 0
-      max value: 1
-      min value: -1
-      show caption: true
-      text size: 12
-      top: 10
-      update interval: 0.03999999910593033
-      width: 100
-    - Class: jsk_rviz_plugin/PieChart
-      Enabled: false
-      Name: Yaw Rate
-      Topic: /analyzer/rviz_yawrate
-      Value: false
-      auto color change: false
-      background color: 0; 0; 0
-      backround alpha: 0
-      clockwise rotate direction: false
-      foreground alpha: 0.699999988079071
-      foreground alpha 2: 0.4000000059604645
-      foreground color: 25; 255; 240
-      left: 970
-      max color: 255; 0; 0
-      max color change threthold: 0
-      max value: 3.140000104904175
-      med color: 255; 0; 0
-      med color change threthold: 0
-      min value: -3.140000104904175
-      show caption: true
-      size: 95
-      text size: 14
-      top: 10
-    - Class: jsk_rviz_plugin/TFTrajectory
-      Enabled: true
-      Name: Vehicle Trajectory
-      Value: true
-      color: 130; 130; 130
-      duration: 10
-      frame: base_link
-      line_width: 0.05000000074505806
-    - Class: jsk_rviz_plugin/TwistStamped
-      Enabled: false
-      Name: cmd_vel arrow
-      Queue Size: 10
-      Topic: /analyzer/rviz_cmd_vel
-      Unreliable: false
-      Value: false
-      angular color: 255; 0; 0
-      angular scale: 5
-      linear color: 0; 255; 0
-      linear scale: 1
-    - Buffer length: 100
-      Class: jsk_rviz_plugin/Plotter2D
-      Enabled: false
-      Name: CalcTime ms
-      Show Value: true
-      Topic: /mpc_calc_time
-      Value: false
-      auto color change: false
-      auto scale: true
-      background color: 0; 0; 0
-      backround alpha: 0
-      border: true
-      foreground alpha: 0.699999988079071
-      foreground color: 255; 100; 50
-      height: 100
-      left: 1110
-      linewidth: 1
-      max color: 255; 0; 0
-      max value: 1
-      min value: -1
-      show caption: true
-      text size: 12
-      top: 10
-      update interval: 0.03999999910593033
-      width: 100
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /mpc_center_of_rotation
-      Name: Center Of Rotation
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: true
-    - Align Bottom: false
-      Background Alpha: 0.800000011920929
-      Background Color: 0; 0; 0
-      Class: jsk_rviz_plugin/OverlayText
-      Enabled: true
-      Foreground Alpha: 0.800000011920929
-      Foreground Color: 25; 255; 240
-      Invert Shadow: false
-      Name: Controller Name
-      Overtake BG Color Properties: false
-      Overtake FG Color Properties: false
-      Overtake Position Properties: false
-      Topic: /mpc_overlay_text
-      Value: true
-      font: DejaVu Sans Mono
-      height: 128
-      left: 0
-      line width: 2
-      text size: 12
-      top: 0
-      width: 128
-    - Buffer length: 100
-      Class: jsk_rviz_plugin/Plotter2D
-      Enabled: true
-      Name: vx_variance
-      Show Value: true
-      Topic: /mpc_variance_vx
-      Value: true
-      auto color change: false
-      auto scale: true
-      background color: 0; 0; 0
-      backround alpha: 0
-      border: true
-      foreground alpha: 0.699999988079071
-      foreground color: 25; 255; 240
-      height: 128
-      left: 10
-      linewidth: 1
-      max color: 255; 0; 0
-      max value: 1
-      min value: -1
-      show caption: true
-      text size: 12
-      top: 128
-      update interval: 0.03999999910593033
-      width: 128
-    - Buffer length: 100
-      Class: jsk_rviz_plugin/Plotter2D
-      Enabled: true
-      Name: vy_variance
-      Show Value: true
-      Topic: /mpc_variance_vy
-      Value: true
-      auto color change: false
-      auto scale: true
-      background color: 0; 0; 0
-      backround alpha: 0
-      border: true
-      foreground alpha: 0.699999988079071
-      foreground color: 25; 255; 240
-      height: 128
-      left: 10
-      linewidth: 1
-      max color: 255; 0; 0
-      max value: 1
-      min value: -1
-      show caption: true
-      text size: 12
-      top: 300
-      update interval: 0.03999999910593033
-      width: 128
-    - Buffer length: 100
-      Class: jsk_rviz_plugin/Plotter2D
-      Enabled: true
-      Name: yawrate_variance
-      Show Value: true
-      Topic: /mpc_variance_yawrate
-      Value: true
-      auto color change: false
-      auto scale: true
-      background color: 0; 0; 0
-      backround alpha: 0
-      border: true
-      foreground alpha: 0.699999988079071
-      foreground color: 25; 255; 240
-      height: 128
-      left: 10
-      linewidth: 1
-      max color: 255; 0; 0
-      max value: 1
-      min value: -1
-      show caption: true
-      text size: 12
-      top: 475
-      update interval: 0.03999999910593033
-      width: 128
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /lookahead_pose
-      Name: LookaheadPose
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: true
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /current_pose
-      Name: CurrentPose
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: true
+    Enabled: false
+    Keep: 100
+    Name: Odometry
+    Position Tolerance: 0.10000000149011612
+    Queue Size: 10
+    Shape:
+      Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Color: 255; 25; 0
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Value: Arrow
+    Unreliable: false
+    Value: false
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /groundtruth_odom
+  - Class: rviz_default_plugins/Marker
+    Enabled: true
+    Name: Goal Pose
+    Namespaces:
+      goal_pose: true
+    Queue Size: 100
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /goal_pose_marker
+  - Alpha: 0.699999988079071
+    Class: rviz_default_plugins/Map
+    Color Scheme: map
+    Draw Behind: false
+    Enabled: false
+    Name: Map
+    Unreliable: false
+    Use Timestamp: false
+    Value: false
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /map
+    Update Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /map_updates
+  - Alpha: 0.4000000059604645
+    Class: rviz_default_plugins/Map
+    Color Scheme: costmap
+    Draw Behind: false
+    Enabled: false
+    Name: Local Cost Map
+    Unreliable: false
+    Use Timestamp: false
+    Value: false
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/costmap
+    Update Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/costmap_updates
+  - Alpha: 0.5
+    Class: rviz_default_plugins/Map
+    Color Scheme: raw
+    Draw Behind: false
+    Enabled: true
+    Name: Global Cost Map
+    Unreliable: false
+    Use Timestamp: false
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /global_costmap/costmap
+    Update Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /global_costmap/costmap_updates
+  - Alpha: 0.5
+    Autocompute Intensity Bounds: true
+    Class: grid_map_rviz_plugin/GridMap
+    Color: 200; 200; 200
+    Color Layer: distance_error
+    Color Transformer: GridMapLayer
+    Enabled: false
+    Height Layer: distance_error
+    Height Transformer: Flat
+    History Length: 1
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Max Intensity: 10
+    Min Color: 0; 0; 0
+    Min Intensity: 0
+    Name: Distance Error Map
+    Show Grid Lines: false
+    Unreliable: false
+    Use Rainbow: true
+    Value: false
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /distance_error_map
+  - Alpha: 0.5
+    Autocompute Intensity Bounds: true
+    Class: grid_map_rviz_plugin/GridMap
+    Color: 200; 200; 200
+    Color Layer: ref_yaw
+    Color Transformer: GridMapLayer
+    Enabled: false
+    Height Layer: ref_yaw
+    Height Transformer: Flat
+    History Length: 1
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Max Intensity: 10
+    Min Color: 0; 0; 0
+    Min Intensity: 0
+    Name: Ref Yaw Map
+    Show Grid Lines: false
+    Unreliable: false
+    Use Rainbow: true
+    Value: false
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /ref_yaw_map
+  - Alpha: 1
+    Buffer Length: 1
+    Class: rviz_default_plugins/Path
+    Color: 40; 240; 50
+    Enabled: true
+    Head Diameter: 0.30000001192092896
+    Head Length: 0.20000000298023224
+    Length: 0.30000001192092896
+    Line Style: Billboards
+    Line Width: 0.07500000298023224
+    Name: Global Path
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Pose Color: 255; 85; 255
+    Pose Style: None
+    Queue Size: 10
+    Radius: 0.029999999329447746
+    Shaft Diameter: 0.10000000149011612
+    Shaft Length: 0.10000000149011612
+    Unreliable: false
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /plan
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: MPPI Optimal Traj
+    Namespaces:
+      optimal_trajectory: true
+    Queue Size: 100
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mpc_optimal_traj
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: MPPI Sampled Traj
+    Namespaces:
+      sampled_trajectories: true
+    Queue Size: 100
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mpc_sampled_traj
+  - Class: rviz_2d_overlay_plugins/TextOverlay
+    Name: Controller Name
+    Enabled: true
+    Value: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mpc/overlay_text
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -684,27 +470,21 @@ Visualization Manager:
     Frame Rate: 20
   Name: root
   Tools:
-    - Class: rviz/Interact
-      Hide Inactive Objects: true
-    - Class: rviz/MoveCamera
-    - Class: rviz/Select
-    - Class: rviz/FocusCamera
-    - Class: rviz/Measure
-    - Class: rviz/SetInitialPose
-      Theta std deviation: 0.2617993950843811
-      Topic: /initialpose
-      X std deviation: 0.5
-      Y std deviation: 0.5
-    - Class: rviz/SetGoal
-      Topic: /move_base_simple/goal
-    - Class: rviz/PublishPoint
-      Single click: true
-      Topic: /clicked_point
-    - Class: jsk_rviz_plugin/ScreenshotListener
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+  - Class: rviz_default_plugins/SetGoal
+    Topic: /goal_pose
+  - Class: rviz_default_plugins/PublishPoint
+    Single click: true
+    Topic: /clicked_point
   Value: true
   Views:
     Current:
-      Class: rviz/Orbit
+      Class: rviz_default_plugins/Orbit
       Distance: 19.65355110168457
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -724,7 +504,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Yaw: 3.1349947452545166
-    Saved: ~
+    Saved: null
 Window Geometry:
   Displays:
     collapsed: true

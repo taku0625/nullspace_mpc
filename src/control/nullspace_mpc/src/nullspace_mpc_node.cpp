@@ -2,8 +2,8 @@
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "nullspace_mpc");
-    controller::MPC mpc;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<controller::MPC>());
+    rclcpp::shutdown();
     return 0;
-};
+}

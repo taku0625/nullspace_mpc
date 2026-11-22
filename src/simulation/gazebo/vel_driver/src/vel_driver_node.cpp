@@ -2,8 +2,8 @@
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "vel_driver");
-    gazebo::VelDriver vel_driver;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<gazebo::VelDriver>());
+    rclcpp::shutdown();
     return 0;
-};
+}

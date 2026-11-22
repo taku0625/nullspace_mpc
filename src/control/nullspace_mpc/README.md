@@ -5,27 +5,27 @@ Nullspace MPC as a local planner for autonomous navigation of a 4wids vehicle.
 
 | Topic name      | Type                 | Description                                                  |
 | --------------- | -------------------- | ------------------------------------------------------------ |
-| /groundtruth_odom | nav_msgs/Odometry | The ground truth odometry data. |
-| /move_base/NavfnROS/plan | nav_msgs/Path | The global path data. |
-| /move_base/local_costmap/costmap | nav_msgs/OccupancyGrid | The local costmap data. |
-| /distance_error_map | grid_map_msgs/GridMap | The distance error map data. |
-| /ref_yaw_map | grid_map_msgs/GridMap | The reference yaw map data. |
+| /groundtruth_odom | nav_msgs/msg/Odometry | The ground truth odometry data. |
+| /plan | nav_msgs/msg/Path | The global path data. |
+| /local_costmap/costmap | nav_msgs/msg/OccupancyGrid | The local costmap data. |
+| /distance_error_map | grid_map_msgs/msg/GridMap | The distance error map data. |
+| /ref_yaw_map | grid_map_msgs/msg/GridMap | The reference yaw map data. |
 
 ## Publishing Topics
 
 | Topic name      | Type              | Description                                                  |
 | --------------- | ----------------- | ------------------------------------------------------------ |
-| /cmd_vel | geometry_msgs/Twist | The velocity command consisting of linear and angular velocities (vx, vy, omega). |
-| /mpc/cmd/absvel | geometry_msgs/Twist | The absolute velocity command. i.e. absvel = sqrt(vx^2 + vy^2). |
-| /mpc/cmd/vx | std_msgs/Float32 | The linear velocity command. The front direction of the vehicle is positive. |
-| /mpc/cmd/vy | std_msgs/Float32 | The lateral velocity command. The left direction of the vehicle is positive. |
-| /mpc/cmd/omega | std_msgs/Float32 | The angular velocity command. The counter-clockwise direction is positive. |
-| /mpc/calc_time | std_msgs/Float32 | The calculation time of the controller. |
-| /mpc/overlay_text | jsk_rviz_plugins::OverlayText | The overlay text to show controller name on rviz.|
-| /mpc/optimal_traj | visualization_msgs/MarkerArray | The optimal trajectory for visualization. |
-| /mpc/via_state_seq | visualization_msgs/MarkerArray | The via state sequence for visualization. |
-| /mpc/sampled_traj | visualization_msgs/MarkerArray | The sampled trajectory for visualization. |
-| /mpc/eval_info | mpc_eval_msgs/MPCEval | The evaluation information of the controller. |
+| /cmd_vel | geometry_msgs/msg/Twist | The velocity command consisting of linear and angular velocities (vx, vy, omega). |
+| /mpc/cmd/absvel | geometry_msgs/msg/Twist | The absolute velocity command. i.e. absvel = sqrt(vx^2 + vy^2). |
+| /mpc/cmd/vx | std_msgs/msg/Float32 | The linear velocity command. The front direction of the vehicle is positive. |
+| /mpc/cmd/vy | std_msgs/msg/Float32 | The lateral velocity command. The left direction of the vehicle is positive. |
+| /mpc/cmd/omega | std_msgs/msg/Float32 | The angular velocity command. The counter-clockwise direction is positive. |
+| /mpc/calc_time | std_msgs/msg/Float32 | The calculation time of the controller. |
+| /mpc/overlay_text | rviz_2d_overlay_msgs/msg/OverlayText | The overlay text to show controller name on rviz.|
+| /mpc/optimal_traj | visualization_msgs/msg/MarkerArray | The optimal trajectory for visualization. |
+| /mpc/via_state_seq | visualization_msgs/msg/MarkerArray | The via state sequence for visualization. |
+| /mpc/sampled_traj | visualization_msgs/msg/MarkerArray | The sampled trajectory for visualization. |
+| /mpc/eval_info | mpc_eval_msgs/msg/MPCEval | The evaluation information of the controller. |
 
 ## Node Parameters
 
@@ -67,7 +67,7 @@ To launch the node individually, run the following commands.
 For nullspace_mpc node: (config/nullspace_mpc.yaml will be loaded.)
 ```
 source devel/setup.bash
-roslaunch nullspace_mpc nullspace_mpc.launch
+ros2 launch nullspace_mpc nullspace_mpc.launch.py
 ```
 
 ## Note

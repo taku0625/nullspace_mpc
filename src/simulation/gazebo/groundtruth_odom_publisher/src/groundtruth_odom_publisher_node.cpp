@@ -2,8 +2,8 @@
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "groundtruth_odom_publisher");
-    gazebo::GroundTruthOdomPublisher groundtruth_odom_publisher;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<gazebo::GroundTruthOdomPublisher>());
+    rclcpp::shutdown();
     return 0;
-};
+}

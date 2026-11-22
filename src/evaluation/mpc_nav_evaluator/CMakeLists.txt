@@ -1,18 +1,9 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.16)
 project(mpc_nav_evaluator)
 
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  geometry_msgs
-  nav_msgs
-  rospy
-  std_msgs
-  tf2
-  tf2_geometry_msgs
-  tf2_ros
-)
+find_package(ament_cmake REQUIRED)
 
-catkin_package(
-)
+install(PROGRAMS scripts/mpc_nav_evaluator.py DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+
+ament_package()

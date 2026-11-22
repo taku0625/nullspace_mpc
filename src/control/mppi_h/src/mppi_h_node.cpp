@@ -2,8 +2,8 @@
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "mppi_h");
-    controller_mppi_h::MPPI mppi;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<controller_mppi_h::MPPI>());
+    rclcpp::shutdown();
     return 0;
-};
+}

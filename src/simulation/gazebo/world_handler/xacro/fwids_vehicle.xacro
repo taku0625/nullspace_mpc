@@ -29,11 +29,10 @@
     <material name="gray_a"> <color rgba="0.5 0.5 0.5 0.6"/> </material>
 
     <!-- ## macro for gazebo material settings -->
-    <xacro:macro name="gazebo_material" params="ref mu *color">
+    <xacro:macro name="gazebo_material" params="ref mu">
         <gazebo reference="${ref}">
             <mu1>${mu}</mu1>
             <mu2>${mu}</mu2>
-        <xacro:insert_block name="color" />
         </gazebo>
     </xacro:macro>
 
@@ -85,16 +84,6 @@
         <xacro:insert_block name="axis" />
         </joint>
 
-        <transmission name="${name}_trans">
-        <type>transmission_interface/SimpleTransmission</type>
-        <joint name="${name}_joint">
-            <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-        </joint>
-        <actuator name="${name}_motor">
-            <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-            <mechanicalReduction>1</mechanicalReduction>
-        </actuator>
-        </transmission>
     </xacro:macro>
 
     <xacro:macro name="rotor_joint" params="name parent child *origin *axis">
@@ -106,16 +95,6 @@
         <dynamics damping="0.1"/>
         </joint>
 
-        <transmission name="${name}_trans">
-        <type>transmission_interface/SimpleTransmission</type>
-        <joint name="${name}_joint">
-            <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
-        </joint>
-        <actuator name="${name}_motor">
-            <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
-            <mechanicalReduction>1</mechanicalReduction>
-        </actuator>
-        </transmission>
     </xacro:macro>
 
     <xacro:macro name="sus_joint" params="name parent child *origin *axis">
@@ -127,20 +106,6 @@
         <xacro:insert_block name="axis" />
         <dynamics damping="0.1"/>
         </joint>
-        <transmission name="${name}_trans">
-        <type>transmission_interface/SimpleTransmission</type>
-        <joint name="${name}_joint">
-            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-        </joint>
-        <actuator name="${name}_motor">
-            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-            <mechanismReduction>1</mechanismReduction>
-        </actuator>
-        </transmission>
-        <gazebo reference="${name}_joint">
-        <kp>50000</kp>
-        <kd>500</kd>
-        </gazebo>
     </xacro:macro>
 
     <!-- ## macro for define a wheel unit -->
@@ -151,9 +116,7 @@
         <cylinder radius="0.025" length="0.025" />
         <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="${name}_wheel_base_link" mu="0.8">
-		<material>Gazebo/Black</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="${name}_wheel_base_link" mu="0.8" />
 	<xacro:fixed_joint name="${name}_wheel_joint" parent="${parent}" child="${name}_wheel_base_link">
         <origin xyz="${x_pos} ${y_pos} ${z_pos}" rpy="0 0 0"/>
 	</xacro:fixed_joint>
@@ -163,9 +126,7 @@
 		<cylinder radius="0.01" length="0.1"/>
         <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="${name}_wheel_suspension" mu="0.8">
-		<material>Gazebo/Red</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="${name}_wheel_suspension" mu="0.8" />
     <xacro:sus_joint name="${name}_wheel_suspension" parent="${name}_wheel_base_link" child="${name}_wheel_suspension">
         <origin xyz="0.0 0.0 -0.1" rpy="0 0 0"/>
         <axis xyz="0 0 1"/>
@@ -176,9 +137,7 @@
 		<cylinder radius="${tire_radius/2.0}" length="${tire_thickness/2.0}"/>
         <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="${name}_wheel_steer" mu="0.8">
-		<material>Gazebo/GreyTransparent</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="${name}_wheel_steer" mu="0.8" />
 	<xacro:steer_joint name="${name}_wheel_steer" parent="${name}_wheel_suspension" child="${name}_wheel_steer">
         <origin xyz="0.0 0.0 -0.1" rpy="0 0 0"/>
         <axis xyz="0 0 1"/>
@@ -189,9 +148,7 @@
 		<cylinder radius="${tire_radius}" length="${tire_thickness}"/>
         <inertia ixx="0.0029167" iyy="0.0029167" izz="0.0056250" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="${name}_wheel_rotor" mu="0.8">
-		<material>Gazebo/DarkGrey</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="${name}_wheel_rotor" mu="0.8" />
 	<xacro:rotor_joint name="${name}_wheel_rotor" parent="${name}_wheel_steer" child="${name}_wheel_rotor">
         <origin xyz="0 0 ${-tire_radius-0.025}" rpy="-1.57 0 0"/>
         <axis xyz="0 0 1"/>
@@ -209,18 +166,14 @@
         <cylinder radius="${(l_f + l_r) * 0.5}" length="${body_thickness}" />
         <inertia ixx="0.0118750" iyy="0.0118750" izz="0.0200000" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="body" mu="0.8">
-		<material>Gazebo/GreyTransparent</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="body" mu="0.8" />
 
     <!-- ## 2d lidar link -->
-	<xacro:link_generator name="laser_link" mass="0.0" color_name="blue">
+	<xacro:link_generator name="laser_link" mass="0.01" color_name="blue">
         <cylinder radius="0.025" length="0.025" />
-        <inertia ixx="0" iyy="0" izz="0" ixy="0" ixz="0" iyz="0"/>
+        <inertia ixx="0.00001" iyy="0.00001" izz="0.00001" ixy="0" ixz="0" iyz="0"/>
 	</xacro:link_generator>
-    <xacro:gazebo_material ref="laser_link" mu="0.8">
-		<material>Gazebo/Blue</material>
-    </xacro:gazebo_material>
+    <xacro:gazebo_material ref="laser_link" mu="0.8" />
 
     <!-- # generate joints -->
 
@@ -242,21 +195,49 @@
 
     <!-- # gazebo settings -->
 
-    <!-- ## import plugin "gazebo_ros_control" -->
+    <xacro:macro name="wheel_controllers" params="wheel">
+        <gazebo>
+            <plugin filename="gz-sim-joint-position-controller-system"
+                    name="gz::sim::systems::JointPositionController">
+                <joint_name>${wheel}_wheel_steer_joint</joint_name>
+                <topic>/fwids/${wheel}_steer_rad/command</topic>
+                <p_gain>35.0</p_gain>
+                <d_gain>1.0</d_gain>
+                <cmd_min>-40.0</cmd_min>
+                <cmd_max>40.0</cmd_max>
+            </plugin>
+            <plugin filename="gz-sim-joint-controller-system"
+                    name="gz::sim::systems::JointController">
+                <joint_name>${wheel}_wheel_rotor_joint</joint_name>
+                <topic>/fwids/${wheel}_rotor_radpersec/command</topic>
+            </plugin>
+        </gazebo>
+    </xacro:macro>
+    <xacro:wheel_controllers wheel="front_left" />
+    <xacro:wheel_controllers wheel="front_right" />
+    <xacro:wheel_controllers wheel="rear_left" />
+    <xacro:wheel_controllers wheel="rear_right" />
+
     <gazebo>
-        <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
-        <robotNamespace>/fwids</robotNamespace>
+        <plugin filename="gz-sim-joint-state-publisher-system"
+                name="gz::sim::systems::JointStatePublisher">
+            <topic>/fwids/joint_states</topic>
         </plugin>
+    </gazebo>
+
+    <gazebo reference="laser_joint">
+        <preserveFixedJoint>true</preserveFixedJoint>
     </gazebo>
 
     <!-- ## activate laser -->
     <gazebo reference="laser_link">
-      <material>Gazebo/Blue</material>
-      <sensor type="ray" name="laser">
+      <sensor type="gpu_lidar" name="laser">
+        <topic>/laser_link/scan</topic>
+        <gz_frame_id>laser_link</gz_frame_id>
         <pose>0 0 0 0 0 0</pose>
         <visualize>false</visualize>
         <update_rate>10</update_rate>
-        <ray>
+        <lidar>
           <scan>
             <horizontal>
               <samples>800</samples>
@@ -275,26 +256,19 @@
             <mean>0.0</mean>
             <stddev>0.01</stddev>
           </noise>
-        </ray>
-        <plugin name="gazebo_ros_lidar_controller" filename="libgazebo_ros_laser.so">
-          <topicName>/laser_link/scan</topicName>
-          <frameName>laser_link</frameName>
-        </plugin>
+        </lidar>
       </sensor>
     </gazebo>
 
     <!-- ## publish true odometry value -->
     <gazebo>
-      <plugin name="groundtruth" filename="libgazebo_ros_p3d.so">
-          <alwaysOn>true</alwaysOn>
-          <updateRate>50.0</updateRate>
-          <bodyName>base_link</bodyName>
-          <topicName>groundtruth_odom</topicName>
-          <frameName>map</frameName>
-          <xyzOffsets>0 0 0</xyzOffsets>
-          <rpyOffsets>0 0 0</rpyOffsets>
-          <gaussianNoise>0.02</gaussianNoise>
-      </plugin>
+        <plugin filename="gz-sim-odometry-publisher-system"
+                name="gz::sim::systems::OdometryPublisher">
+            <odom_frame>odom</odom_frame>
+            <robot_base_frame>base_link</robot_base_frame>
+            <odom_topic>/groundtruth_odom</odom_topic>
+            <odom_publish_frequency>50</odom_publish_frequency>
+        </plugin>
     </gazebo>
 
 </robot>

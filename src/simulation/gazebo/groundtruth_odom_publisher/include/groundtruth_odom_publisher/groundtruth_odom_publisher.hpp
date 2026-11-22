@@ -1,25 +1,21 @@
 #pragma once
 
-#include <ros/ros.h>
-#include <nav_msgs/Odometry.h>
-#include <tf2_ros/transform_broadcaster.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <rclcpp/rclcpp.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <tf2_ros/transform_broadcaster.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 namespace gazebo
 {
-    class GroundTruthOdomPublisher
+    class GroundTruthOdomPublisher : public rclcpp::Node
     {
         public:
             GroundTruthOdomPublisher();
-            ~GroundTruthOdomPublisher();
-            void groundTruthOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
+            void groundTruthOdomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
         private:
-            ros::NodeHandle nh_;
-            ros::NodeHandle private_nh_;
-            ros::Subscriber sub_groundtruth_odom_;
-            ros::Time prev_tf_timestamp_;
+            rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_groundtruth_odom_;
             tf2_ros::TransformBroadcaster tf_broadcaster_;
-            geometry_msgs::TransformStamped odom_tf_;
+            geometry_msgs::msg::TransformStamped odom_tf_;
             std::string base_frame_name, odom_frame_name;
     };
 }

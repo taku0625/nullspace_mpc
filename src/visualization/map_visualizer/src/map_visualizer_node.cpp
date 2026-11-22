@@ -2,8 +2,8 @@
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "map_visualizer");
-    visualization::MapVisualizer map_visualizer;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<visualization::MapVisualizer>());
+    rclcpp::shutdown();
     return 0;
-};
+}

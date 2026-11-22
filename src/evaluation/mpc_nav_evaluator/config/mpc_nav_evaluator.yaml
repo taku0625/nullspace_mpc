@@ -1,4 +1,5 @@
-mpc_eval_topic: /mpc/eval_info
-goal_pose_topic: /move_base_simple/goal
-initial_pose_x: 0.0
-initial_pose_y: 0.0
+mpc_nav_evaluator:
+  ros__parameters:
+    mpc_eval_topic: /mpc/eval_info
+    goal_pose_topic: /goal_pose
+    goal_tolerance: 0.5

@@ -6,7 +6,7 @@ This package subscribes /groundtruth_odom topic from the gazebo world and conver
 
 | Topic name      | Type                 | Description                                                  |
 | --------------- | -------------------- | ------------------------------------------------------------ |
-| /groundtruth_odom | nav_msgs/Odometry | The ground truth odometry data. |
+| /groundtruth_odom | nav_msgs/msg/Odometry | The ground truth odometry data. |
 
 
 ## Publishing Topics
@@ -28,6 +28,6 @@ This package subscribes /groundtruth_odom topic from the gazebo world and conver
 To launch the node individually, run the following commands.
 ```
 source devel/setup.bash
-roslaunch groundtruth_odom_publisher groundtruth_odom_publisher.launch
+ros2 launch groundtruth_odom_publisher groundtruth_odom_publisher.launch.py
 ```
 

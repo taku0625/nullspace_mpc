@@ -5,7 +5,7 @@ It demonstrates agile and smooth navigation through a narrow environment with a 
 
 <div align="center">
 
-[![ROS Distro: Noetic](https://img.shields.io/badge/ROS-Noetic-red.svg)](https://wiki.ros.org/noetic)
+[![ROS 2 Jazzy](https://img.shields.io/badge/ROS_2-Jazzy-blue.svg)](https://docs.ros.org/en/jazzy/)
 [![Docker](https://img.shields.io/badge/-Docker-EEE.svg?logo=docker&style=flat)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
@@ -16,181 +16,70 @@ It demonstrates agile and smooth navigation through a narrow environment with a 
 
 ## Setup
 
-### [Option 1] Native Environment
+Use Ubuntu 24.04 and ROS 2 Jazzy. In a standalone checkout, run the following
+from the repository root. In a parent ROS workspace, initialize this submodule
+and run the commands from the workspace root.
 
-Note: This is the recommended setup for optimal performance.
+```bash
+source /opt/ros/jazzy/setup.bash
+sudo rosdep init  # Once per machine
+rosdep update --rosdistro jazzy
+rosdep install -y --from-paths src --ignore-src --rosdistro jazzy
+colcon build --packages-up-to nullspace_mpc_bringup --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/local_setup.bash
+```
 
-<details>
-<summary>Click here to expand</summary>
+The QP solver uses the Jazzy `osqp_vendor` package. Its build downloads the
+pinned OsqpEigen release if a compatible copy is unavailable.
 
-1. Prerequisites
-    - [Ubuntu 20.04](https://releases.ubuntu.com/focal/)
-    - [ROS Noetic](https://wiki.ros.org/noetic)
+For Docker, use `make setup_docker_cpu` and `make run_docker_cpu`.
+`make run_docker_gpu` uses the same image with NVIDIA Container Toolkit.
+Run `make build` from the container shell.
 
-2. Clone the repository.
-    ```bash
-    cd <path-to-your-workspace>
-    git clone https://github.com/MizuhoAOKI/nullspace_mpc
-    ```
+## Navigate in Gazebo Harmonic
 
-3. Install packages not handled by rosdep.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    sudo make install_deps
-    ```
+```bash
+ros2 launch nullspace_mpc_bringup navigation.launch.py
+```
 
-4. Initialize rosdep, update it, and install ROS dependencies.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    sudo rosdep init # Skip if already initialized
-    rosdep update --rosdistro noetic
-    rosdep install -y --from-paths src --ignore-src --rosdistro noetic
-    ```
+Use the **2D Goal Pose** tool in RViz2, or publish a `geometry_msgs/msg/PoseStamped`
+on `/goal_pose` in the `map` frame. Nav2 computes the global path, and the
+selected MPC controller publishes `/cmd_vel`. The demo uses Gazebo ground
+truth for localization.
 
-5. Build the project.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make build
-    ```
+- Run the reduced-computation controller with `controller_mode:=lite`.
+- Set `local_planner:=mppi_h` for the hybrid MPPI baseline.
+  `mppi_3d_a`, `mppi_3d_b` and `mppi_4d` are also available.
+- Select `gazebo_world_name:=maze`, `empty_garden` or `cylinder_garden`.
+- For a headless run, use `open_rviz:=false show_gazebo_gui:=false gazebo_headless:=true`.
 
-</details>  
+Use `gazebo_world.launch.py` for manual joystick operation and
+`mapping.launch.py` for SLAM Toolbox. View ROS 2 bag data with
+`rosbag_play.launch.py` and `ros2 bag play <bag> --clock`.
 
+### Use an existing ROS 2 navigation stack
 
-### [Option 2] Docker Environment
+`ros2 launch nullspace_mpc nullspace_mpc.launch.py` starts the controller
+with the default profile. Choose `controller_mode:=lite` for the lighter profile.
+The node expects `/groundtruth_odom`, `/plan`, `/local_costmap/costmap`,
+`/distance_error_map` and `/ref_yaw_map`. Supply odometry pose, path and
+maps in the same coordinate frame. The YAML files in
+`src/control/nullspace_mpc/config/` configure the topic names and controller.
+`reference_costmap_generator.launch.py` in the
+`reference_costmap_generator` package produces the two reference maps from
+`/map` and `/plan`.
 
-#### GPU Accelerated Environment
+### Multi-goal evaluation
 
-<details>
-<summary>Click here to expand</summary>
+Run from the repository root after building and sourcing the overlay.
 
-1. Prerequisites
-    - [Docker](https://docs.docker.com/engine/install/ubuntu/)
-        - For Ubuntu users, you can use the convenience script:
-            ```bash
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sudo sh get-docker.sh
-            ```
-    - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-        - This is required to allow Docker containers to access the host's GPU.
-    - NVIDIA GPU & Driver
-        - An NVIDIA GPU and a compatible driver for the base image (nvidia/cuda:12.4.1-devel-ubuntu20.04) are required.
+```bash
+ros2 run nullspace_mpc_bringup run_evaluation.py \
+  --agenda_yaml_path data/eval_demo/agenda.yaml --controller nullspace_mpc
+```
 
-2. Clone the repository.
-    ```bash
-    cd <path-to-your-workspace>
-    git clone https://github.com/MizuhoAOKI/nullspace_mpc
-    ```
-
-3. Build the Docker image (first-time setup).
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make setup_docker_gpu
-    ```
-
-4. Run the Docker container and start a bash session inside.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make run_docker_gpu
-    ```
-
-5. [Inside the docker container] Build the project.
-    ```bash
-    cd ~/nullspace_mpc
-    make build
-    ```
-
-</details>
-
-#### CPU-Only Environment
-
-<details>
-<summary>Click here to expand</summary>
-
-Warning: This setup runs entirely on the CPU. Performance is significantly lower, and on my test system it was not sufficient for stable control. Use GPU or native setup whenever possible.
-
-1. Prerequisites
-    - [Docker](https://docs.docker.com/engine/install/ubuntu/)
-        - For Ubuntu users:
-            ```bash
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sudo sh get-docker.sh
-            ```
-
-2. Clone the repository.
-    ```bash
-    cd <path-to-your-workspace>
-    git clone https://github.com/MizuhoAOKI/nullspace_mpc
-    ```
-
-3. Build the Docker image (first-time setup).
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make setup_docker_cpu
-    ```
-
-4. Run the Docker container and start a bash session inside.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make run_docker_cpu
-    ```
-
-5. [Inside the docker container] Build the project.
-    ```bash
-    cd ~/nullspace_mpc
-    make build
-    ```
-
-</details>
-
-
-## Usage
-
-This package supports two operation modes:
-
-1. **Manual Goal Mode** — you set a 2D Nav Goal in RViz and the robot navigates to it.  
-2. **Demo (Multi-Goal) Mode** — the robot automatically visits a sequence of goals defined in an agenda file.
-
----
-
-### 1) Manual Goal Mode
-
-Set a **2D Nav Goal** in RViz, and the robot will navigate to the goal.
-
-- **Nullspace MPC (Proposed)**
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make navigation_nullspace_mpc
-    ```
-    Try this setting for reduced computational load.
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make navigation_nullspace_mpc_lite
-    ```
-
-- MPPI (Baseline)
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make navigation_mppi
-    ```
-
-### 2) Demo (Multi-Goal) Mode
-
-Runs an evaluation script that automatically sends multiple goals in sequence (defined in `data/eval_demo/agenda.yaml`) and logs results to `./result/`.
-
-- **Nullspace MPC (Proposed)**
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make eval_demo_nullspace_mpc
-    ```
-
-- MPPI (Baseline)
-    ```bash
-    cd <path-to-your-workspace>/nullspace_mpc
-    make eval_demo_mppi
-    ```
-
-> [!NOTE]
-> Due to the asynchronous nature of ROS simulations and the sampling-based algorithm relying on multi-threading computation, the controllers' performance can vary depending on your system environment.
+Use `--controller mppi_h` for the baseline or `--headless` to omit the GUIs.
+The demo agenda writes each episode and the summary CSV to `./result/`.
 
 ## Citation
 If you use this software in your research, please consider citing the following papers.

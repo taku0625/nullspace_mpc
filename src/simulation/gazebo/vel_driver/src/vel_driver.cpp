@@ -1,64 +1,61 @@
 #include "vel_driver/vel_driver.hpp"
+#include <cmath>
 
 namespace gazebo
 {
 
 // constructor
 VelDriver::VelDriver()
-    : nh_(""), private_nh_("~")
+    : Node("vel_driver")
 {
     // load parameters 
 
     //// vehicle parameters
-    private_nh_.param<float>("l_f", l_f, 0.5);
-    private_nh_.param<float>("l_r", l_r, 0.5);
-    private_nh_.param<float>("d_l", d_l, 0.5);
-    private_nh_.param<float>("d_r", d_r, 0.5);
-    private_nh_.param<float>("tire_radius", tire_radius, 0.2);
+    l_f = declare_parameter<double>("l_f", 0.5);
+    l_r = declare_parameter<double>("l_r", 0.5);
+    d_l = declare_parameter<double>("d_l", 0.5);
+    d_r = declare_parameter<double>("d_r", 0.5);
+    tire_radius = declare_parameter<double>("tire_radius", 0.2);
 
     //// subscribing topic names
-    std::string control_cmd_vel_topic;
-    private_nh_.param<std::string>("control_cmd_vel_topic", control_cmd_vel_topic, "/cmd_vel");
+    const auto control_cmd_vel_topic = declare_parameter<std::string>("control_cmd_vel_topic", "/cmd_vel");
 
     //// publishing topic names
     std::string front_left_steer_cmd_topic, front_right_steer_cmd_topic, rear_left_steer_cmd_topic, rear_right_steer_cmd_topic;
     std::string front_left_rotor_cmd_topic, front_right_rotor_cmd_topic, rear_left_rotor_cmd_topic, rear_right_rotor_cmd_topic;
-    private_nh_.param<std::string>("front_left_steer_cmd_topic", front_left_steer_cmd_topic, "/fwids/front_left_steer_rad/command");
-    private_nh_.param<std::string>("front_right_steer_cmd_topic", front_right_steer_cmd_topic, "/fwids/front_right_steer_rad/command");
-    private_nh_.param<std::string>("rear_left_steer_cmd_topic", rear_left_steer_cmd_topic, "/fwids/rear_left_steer_rad/command");
-    private_nh_.param<std::string>("rear_right_steer_cmd_topic", rear_right_steer_cmd_topic, "/fwids/rear_right_steer_rad/command");
-    private_nh_.param<std::string>("front_left_rotor_cmd_topic", front_left_rotor_cmd_topic, "/fwids/front_left_rotor_radpersec/command");
-    private_nh_.param<std::string>("front_right_rotor_cmd_topic", front_right_rotor_cmd_topic, "/fwids/front_right_rotor_radpersec/command");
-    private_nh_.param<std::string>("rear_left_rotor_cmd_topic", rear_left_rotor_cmd_topic, "/fwids/rear_left_rotor_radpersec/command");
-    private_nh_.param<std::string>("rear_right_rotor_cmd_topic", rear_right_rotor_cmd_topic, "/fwids/rear_right_rotor_radpersec/command");
+    front_left_steer_cmd_topic = declare_parameter<std::string>("front_left_steer_cmd_topic", "/fwids/front_left_steer_rad/command");
+    front_right_steer_cmd_topic = declare_parameter<std::string>("front_right_steer_cmd_topic", "/fwids/front_right_steer_rad/command");
+    rear_left_steer_cmd_topic = declare_parameter<std::string>("rear_left_steer_cmd_topic", "/fwids/rear_left_steer_rad/command");
+    rear_right_steer_cmd_topic = declare_parameter<std::string>("rear_right_steer_cmd_topic", "/fwids/rear_right_steer_rad/command");
+    front_left_rotor_cmd_topic = declare_parameter<std::string>("front_left_rotor_cmd_topic", "/fwids/front_left_rotor_radpersec/command");
+    front_right_rotor_cmd_topic = declare_parameter<std::string>("front_right_rotor_cmd_topic", "/fwids/front_right_rotor_radpersec/command");
+    rear_left_rotor_cmd_topic = declare_parameter<std::string>("rear_left_rotor_cmd_topic", "/fwids/rear_left_rotor_radpersec/command");
+    rear_right_rotor_cmd_topic = declare_parameter<std::string>("rear_right_rotor_cmd_topic", "/fwids/rear_right_rotor_radpersec/command");
 
     // initialize subscribers
-    sub_cmd_vel_ = nh_.subscribe(control_cmd_vel_topic, 1, &VelDriver::cmdVelCallback, this);
+    sub_cmd_vel_ = create_subscription<geometry_msgs::msg::Twist>(
+        control_cmd_vel_topic, 1,
+        [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) { cmdVelCallback(msg); });
 
     // initialize publishers
-    pub_cmd_front_left_steer = nh_.advertise<std_msgs::Float64>(front_left_steer_cmd_topic, 10);
-    pub_cmd_front_right_steer = nh_.advertise<std_msgs::Float64>(front_right_steer_cmd_topic, 10);
-    pub_cmd_rear_left_steer = nh_.advertise<std_msgs::Float64>(rear_left_steer_cmd_topic, 10);
-    pub_cmd_rear_right_steer = nh_.advertise<std_msgs::Float64>(rear_right_steer_cmd_topic, 10);
-    pub_cmd_front_left_rotor = nh_.advertise<std_msgs::Float64>(front_left_rotor_cmd_topic, 10);
-    pub_cmd_front_right_rotor = nh_.advertise<std_msgs::Float64>(front_right_rotor_cmd_topic, 10);
-    pub_cmd_rear_left_rotor = nh_.advertise<std_msgs::Float64>(rear_left_rotor_cmd_topic, 10);
-    pub_cmd_rear_right_rotor = nh_.advertise<std_msgs::Float64>(rear_right_rotor_cmd_topic, 10);
-}
-
-// destructor
-VelDriver::~VelDriver()
-{
-    // No Contents
+    pub_cmd_front_left_steer = create_publisher<std_msgs::msg::Float64>(front_left_steer_cmd_topic, 10);
+    pub_cmd_front_right_steer = create_publisher<std_msgs::msg::Float64>(front_right_steer_cmd_topic, 10);
+    pub_cmd_rear_left_steer = create_publisher<std_msgs::msg::Float64>(rear_left_steer_cmd_topic, 10);
+    pub_cmd_rear_right_steer = create_publisher<std_msgs::msg::Float64>(rear_right_steer_cmd_topic, 10);
+    pub_cmd_front_left_rotor = create_publisher<std_msgs::msg::Float64>(front_left_rotor_cmd_topic, 10);
+    pub_cmd_front_right_rotor = create_publisher<std_msgs::msg::Float64>(front_right_rotor_cmd_topic, 10);
+    pub_cmd_rear_left_rotor = create_publisher<std_msgs::msg::Float64>(rear_left_rotor_cmd_topic, 10);
+    pub_cmd_rear_right_rotor = create_publisher<std_msgs::msg::Float64>(rear_right_rotor_cmd_topic, 10);
 }
 
 // /cmd_vel topic callback
-void VelDriver::cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg)
+void VelDriver::cmdVelCallback(const geometry_msgs::msg::Twist::ConstSharedPtr& msg)
 {
     // if msg contains NaN, return without publishing commands
-    if (std::isnan(msg->linear.x) || std::isnan(msg->linear.y) || std::isnan(msg->angular.z))
+    if (!std::isfinite(msg->linear.x) || !std::isfinite(msg->linear.y) || !std::isfinite(msg->angular.z))
     {
-        ROS_WARN("Received NaN in Twist Command. Skip this message.");
+        RCLCPP_WARN(get_logger(), "Received a non-finite Twist command.");
+        return;
     }
 
     // parse received twist message
@@ -68,7 +65,7 @@ void VelDriver::cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg)
     float omega =  msg->angular.z; // angular velocity around the z-axis, counter-clockwise is positive
 
     // [for debug] annouce received Twist message
-    ROS_DEBUG("Received Twist Command: v_right = %+5.1f, v_forward = %+5.1f, yaw_rate = %+5.1f", v_r, v_f, omega);
+    RCLCPP_DEBUG(get_logger(), "Received Twist Command: v_right = %+5.1f, v_forward = %+5.1f, yaw_rate = %+5.1f", v_r, v_f, omega);
 
     // convert from Vx, Vy, Omega to 8 DoF vehicle control commands
     float vx_fl = v_r - omega * l_f;
@@ -92,19 +89,19 @@ void VelDriver::cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg)
     cmd_rear_right_rotor.data  = sqrt(vx_rr*vx_rr + vy_rr*vy_rr) / tire_radius; // [rad/s]
 
     // [for debug] annouce publishing Twist message
-    ROS_DEBUG("FWIDS Steer Commands: FL_steer = %+5.1f, FR_steer = %+5.1f, RL_steer = %+5.1f, RR_steer = %+5.1f", cmd_front_left_steer.data, cmd_front_right_steer.data, cmd_rear_left_steer.data, cmd_rear_right_steer.data);
-    ROS_DEBUG("FWIDS Rotor Commands: FL_rotor = %+5.1f, FR_rotor = %+5.1f, RL_rotor = %+5.1f, RR_rotor = %+5.1f", cmd_front_left_rotor.data, cmd_front_right_rotor.data, cmd_rear_left_rotor.data, cmd_rear_right_rotor.data);
+    RCLCPP_DEBUG(get_logger(), "FWIDS Steer Commands: FL_steer = %+5.1f, FR_steer = %+5.1f, RL_steer = %+5.1f, RR_steer = %+5.1f", cmd_front_left_steer.data, cmd_front_right_steer.data, cmd_rear_left_steer.data, cmd_rear_right_steer.data);
+    RCLCPP_DEBUG(get_logger(), "FWIDS Rotor Commands: FL_rotor = %+5.1f, FR_rotor = %+5.1f, RL_rotor = %+5.1f, RR_rotor = %+5.1f", cmd_front_left_rotor.data, cmd_front_right_rotor.data, cmd_rear_left_rotor.data, cmd_rear_right_rotor.data);
 
     // publish 8 DoF vehicle commands to gazebo ros_control plugin
-    pub_cmd_front_left_steer.publish(cmd_front_left_steer);
-    pub_cmd_front_right_steer.publish(cmd_front_right_steer);
-    pub_cmd_rear_left_steer.publish(cmd_rear_left_steer);
-    pub_cmd_rear_right_steer.publish(cmd_rear_right_steer);
+    pub_cmd_front_left_steer->publish(cmd_front_left_steer);
+    pub_cmd_front_right_steer->publish(cmd_front_right_steer);
+    pub_cmd_rear_left_steer->publish(cmd_rear_left_steer);
+    pub_cmd_rear_right_steer->publish(cmd_rear_right_steer);
 
-    pub_cmd_front_left_rotor.publish(cmd_front_left_rotor);
-    pub_cmd_front_right_rotor.publish(cmd_front_right_rotor);
-    pub_cmd_rear_left_rotor.publish(cmd_rear_left_rotor);
-    pub_cmd_rear_right_rotor.publish(cmd_rear_right_rotor);
+    pub_cmd_front_left_rotor->publish(cmd_front_left_rotor);
+    pub_cmd_front_right_rotor->publish(cmd_front_right_rotor);
+    pub_cmd_rear_left_rotor->publish(cmd_rear_left_rotor);
+    pub_cmd_rear_right_rotor->publish(cmd_rear_right_rotor);
 }
 
 } // namespace gazebo
