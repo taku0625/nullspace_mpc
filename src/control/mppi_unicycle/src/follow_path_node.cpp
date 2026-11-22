@@ -4,6 +4,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
+#include <misachiya_drive/msg/drive_state.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -21,6 +22,7 @@ namespace
 using FollowPath = action::FollowPath;
 using Goal = rclcpp_action::ServerGoalHandle<FollowPath>;
 using Clock = std::chrono::steady_clock;
+using DriveState = misachiya_drive::msg::DriveState;
 constexpr auto distance_layer = "distance_error";
 constexpr auto yaw_layer = "ref_yaw";
 }  // namespace
@@ -32,6 +34,8 @@ public:
   : Node("mppi_unicycle"),
     settings_(declare_settings(*this)), core_(settings_),
     base_(declare_parameter<std::string>("base_frame", "base_link")),
+    wheel_radius_(positive_parameter(*this, "wheel_radius_m", 0.09)),
+    drive_state_timeout_(positive_parameter(*this, "drive_state_timeout", 0.4)),
     startup_timeout_(positive_parameter(*this, "startup_timeout", 2.0)),
     pose_timeout_(positive_parameter(*this, "pose_timeout", 0.4)),
     stall_timeout_(positive_parameter(*this, "stall_timeout", 8.0)),
@@ -83,6 +87,13 @@ public:
           reference_.reset();
         }
       });
+
+    const auto drive_state_topic = declare_parameter<std::string>("drive_state_topic", "");
+    if (!drive_state_topic.empty()) {
+      drive_sub_ = create_subscription<DriveState>(
+        drive_state_topic, rclcpp::SensorDataQoS().keep_last(1),
+        [this](const DriveState & state) {drive_state_ = state;});
+    }
 
     const auto costmap_topic = declare_parameter<std::string>("collision_costmap_topic", "");
     if (!costmap_topic.empty()) {
@@ -168,6 +179,37 @@ private:
         Clock::now() - *collision_received_).count() <= costmap_timeout_);
   }
 
+  bool fresh_drive_state() const
+  {
+    if (!drive_sub_) {
+      return true;
+    }
+    if (!drive_state_ || !drive_state_->left.negotiated || !drive_state_->right.negotiated) {
+      return false;
+    }
+    const auto & stamp = drive_state_->stamp;
+    if (stamp.sec < 0 || stamp.nanosec >= 1000000000U || (stamp.sec == 0 && stamp.nanosec == 0)) {
+      return false;
+    }
+    const double age = (now() - rclcpp::Time(stamp, get_clock()->get_clock_type())).seconds();
+    return age >= -0.05 && age <= drive_state_timeout_;
+  }
+
+  bool apply_wheel_limits()
+  {
+    if (!drive_sub_) {
+      return true;
+    }
+    const auto & left = drive_state_->left;
+    const auto & right = drive_state_->right;
+    const double minimum = wheel_radius_ * std::max(left.min_output_rad_s, right.min_output_rad_s);
+    double maximum = wheel_radius_ * std::min(left.max_output_rad_s, right.max_output_rad_s);
+    if (settings_.wheel_speed_limit > 0.0) {
+      maximum = std::min(maximum, settings_.wheel_speed_limit);
+    }
+    return core_.set_wheel_speed_limits(minimum, maximum);
+  }
+
   std::optional<Pose> costmap_transform()
   {
     if (!collision_sub_ || collision_.getFrameId() == "map") {
@@ -230,6 +272,14 @@ private:
       wait_for_input("The reference costmap for the recorded path is unavailable");
       return;
     }
+    if (!fresh_drive_state()) {
+      wait_for_input("Chassis state is missing, stale or waiting for the ESC speed limits");
+      return;
+    }
+    if (!apply_wheel_limits()) {
+      finish("The negotiated ESC speed limits conflict with the MPPI speed limits");
+      return;
+    }
     if (!update_localization() || !localization_->velocity) {
       wait_for_input("Localization TF is missing or stale");
       return;
@@ -274,7 +324,7 @@ private:
       finish("MPPI did not find a feasible trajectory");
       return;
     }
-    if (!fresh_localization() || !fresh_costmap()) {
+    if (!fresh_localization() || !fresh_costmap() || !fresh_drive_state()) {
       finish("A navigation input expired during optimization");
       return;
     }
@@ -290,7 +340,8 @@ private:
       progress_pose_ = pose;
       last_progress_ = time;
     } else if (std::chrono::duration<double>(time - last_progress_).count() > stall_timeout_) {
-      finish("The chassis stopped making progress along the recorded route");
+      const auto reason = drive_state_ ? " (chassis: " + drive_state_->reason + ")" : "";
+      finish("The chassis stopped making progress along the recorded route" + reason);
       return;
     }
 
@@ -303,7 +354,7 @@ private:
   const Settings settings_;
   MppiCore core_;
   const std::string base_;
-  const double startup_timeout_, pose_timeout_, stall_timeout_;
+  const double wheel_radius_, drive_state_timeout_, startup_timeout_, pose_timeout_, stall_timeout_;
   double costmap_timeout_{};
   tf2_ros::Buffer tf_;
   tf2_ros::TransformListener listener_;
@@ -318,9 +369,11 @@ private:
   double outside_reference_distance_{};
   grid_map::GridMap collision_;
   std::optional<Clock::time_point> collision_received_;
+  std::optional<DriveState> drive_state_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_;
   rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr reference_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr collision_sub_;
+  rclcpp::Subscription<DriveState>::SharedPtr drive_sub_;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

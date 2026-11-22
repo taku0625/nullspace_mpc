@@ -69,6 +69,7 @@ class MppiCore
 public:
   explicit MppiCore(Settings settings);
 
+  bool set_wheel_speed_limits(double minimum, double maximum);
   void set_route(std::vector<Pose> route);
   std::optional<Solution> solve(
     const Pose & pose, const VOmega & previous, const Costmap & costmap);
@@ -95,6 +96,8 @@ private:
   std::vector<Pose> route_;
   std::vector<double> arc_;
   double progress_{};
+  double wheel_min_speed_{};
+  double alignment_direction_{};
   bool warm_{};
   std::vector<VOmega> nominal_;
   std::vector<VOmega> controls_;

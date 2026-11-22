@@ -68,6 +68,22 @@ MppiCore::MppiCore(Settings settings)
   costs_.resize(settings.samples);
 }
 
+bool MppiCore::set_wheel_speed_limits(double minimum, double maximum)
+{
+  if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum < 0.0 || maximum <= 0.0 ||
+    minimum > std::min(maximum, settings_.max_linear_speed))
+  {
+    return false;
+  }
+  if (minimum != wheel_min_speed_ || maximum != settings_.wheel_speed_limit) {
+    wheel_min_speed_ = minimum;
+    settings_.wheel_speed_limit = maximum;
+    alignment_direction_ = 0.0;
+    warm_ = false;
+  }
+  return true;
+}
+
 void MppiCore::set_route(std::vector<Pose> route)
 {
   if (!std::all_of(route.begin(), route.end(), finite)) {
@@ -85,6 +101,7 @@ void MppiCore::set_route(std::vector<Pose> route)
     route_.push_back(point);
   }
   progress_ = 0.0;
+  alignment_direction_ = 0.0;
   warm_ = false;
 }
 
@@ -132,7 +149,17 @@ VOmega MppiCore::limit(VOmega input, bool rotate_only) const
 {
   input.v = rotate_only ? 0.0 : std::clamp(input.v, 0.0, settings_.max_linear_speed);
   input.omega = std::clamp(input.omega, -settings_.max_angular_speed, settings_.max_angular_speed);
-  const double fastest_wheel = input.v + 0.5 * settings_.track_width * std::abs(input.omega);
+  const double half_track = 0.5 * settings_.track_width;
+  if (wheel_min_speed_ > 0.0) {
+    // Forward rollouts keep both wheels above the ESC floor. Alignments are in-place turns.
+    input.v = std::clamp(input.v, wheel_min_speed_,
+      std::min(settings_.max_linear_speed, settings_.wheel_speed_limit));
+    const double max_turn = std::min(input.v - wheel_min_speed_,
+        settings_.wheel_speed_limit - input.v) / half_track;
+    input.omega = std::clamp(input.omega, -max_turn, max_turn);
+    return input;
+  }
+  const double fastest_wheel = input.v + half_track * std::abs(input.omega);
   if (settings_.wheel_speed_limit > 0.0 && fastest_wheel > settings_.wheel_speed_limit) {
     const double scale = settings_.wheel_speed_limit / fastest_wheel;
     input.v *= scale;
@@ -230,6 +257,33 @@ std::optional<Solution> MppiCore::solve(
     warm_ = false;
     return Solution{{}, true};
   }
+  if (wheel_min_speed_ > 0.0) {
+    const auto lookahead = pose_at(progress_ + 2.0 * settings_.xy_goal_tolerance);
+    const double target = rotate_only ? goal.yaw :
+      std::atan2(lookahead.y - pose.y, lookahead.x - pose.x);
+    const double error = wrap(target - pose.yaw);
+    // Keep the same turn until aligned so the ESCs can complete acquisition.
+    const double align_threshold = alignment_direction_ == 0.0 ? pi / 4.0 : pi / 8.0;
+    if (rotate_only || std::abs(error) > align_threshold) {
+      warm_ = false;
+      if (alignment_direction_ == 0.0 || std::abs(error) < pi - 0.10) {
+        alignment_direction_ = std::copysign(1.0, error);
+      }
+      if (std::abs(previous.v) > 0.5 * wheel_min_speed_) {
+        return Solution{};
+      }
+      const double half_track = 0.5 * settings_.track_width;
+      const double min_turn = wheel_min_speed_ / half_track;
+      const double max_turn = std::min(settings_.max_angular_speed,
+          settings_.wheel_speed_limit / half_track);
+      if (max_turn < min_turn || (costmap && !std::isfinite(costmap(pose).collision))) {
+        return std::nullopt;
+      }
+      return Solution{{0.0, alignment_direction_ *
+        std::clamp(3.0 * std::abs(error), min_turn, max_turn)}, false};
+    }
+    alignment_direction_ = 0.0;
+  }
   const auto refs = references(pose, rotate_only);
   const auto tracking_seed = seed(pose, refs, rotate_only);
   if (!warm_) {
@@ -242,11 +296,13 @@ std::optional<Solution> MppiCore::solve(
   for (std::size_t sample = 0; sample < costs_.size(); ++sample) {
     auto * input = controls_.data() + sample * steps;
     for (std::size_t step = 0; step < steps; ++step) {
+      if (sample == 2) {
+        input[step] = {};
+        continue;
+      }
       VOmega candidate = nominal_[step];
       if (sample == 1) {
         candidate = tracking_seed[step];
-      } else if (sample == 2) {
-        candidate = {};
       } else if (sample > 2) {
         candidate.v += v_noise(random_);
         candidate.omega += yaw_noise(random_);
@@ -261,9 +317,17 @@ std::optional<Solution> MppiCore::solve(
     warm_ = false;
     return std::nullopt;
   }
+  if (wheel_min_speed_ > 0.0 && best == costs_.begin() + 2) {
+    warm_ = false;
+    return Solution{};
+  }
   std::vector<VOmega> optimum(steps);
   double total = 0.0;
   for (std::size_t sample = 0; sample < costs_.size(); ++sample) {
+    // A blend of moving and stopped profiles could command unsupported wheel speeds.
+    if (wheel_min_speed_ > 0.0 && sample == 2) {
+      continue;
+    }
     const double weight = std::exp(-((costs_[sample] - *best) / settings_.lambda));
     total += weight;
     for (std::size_t step = 0; step < steps; ++step) {

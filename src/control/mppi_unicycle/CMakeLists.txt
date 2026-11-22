@@ -6,6 +6,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(grid_map_core REQUIRED)
 find_package(grid_map_msgs REQUIRED)
 find_package(grid_map_ros REQUIRED)
+find_package(misachiya_drive REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -25,7 +26,7 @@ target_include_directories(mppi_unicycle_core PUBLIC include)
 
 add_executable(follow_path_node src/follow_path_node.cpp)
 ament_target_dependencies(follow_path_node geometry_msgs grid_map_core grid_map_msgs grid_map_ros
-  nav_msgs rclcpp rclcpp_action tf2 tf2_geometry_msgs tf2_ros)
+  misachiya_drive nav_msgs rclcpp rclcpp_action tf2 tf2_geometry_msgs tf2_ros)
 rosidl_get_typesupport_target(action_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 target_link_libraries(follow_path_node mppi_unicycle_core "${action_typesupport}")
 
