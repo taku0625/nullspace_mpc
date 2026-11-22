@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
-#include <utility>
 
 namespace mppi_unicycle
 {
@@ -185,11 +183,8 @@ std::vector<VOmega> MppiCore::seed(
 
 double MppiCore::rollout(
   Pose pose, VOmega previous, const VOmega * controls, const std::vector<Reference> & refs,
-  const Costmap & costmap, bool rotate_only, std::vector<Pose> * states) const
+  const Costmap & costmap, bool rotate_only) const
 {
-  if (states) {
-    states->push_back(pose);
-  }
   double cost = 0.0;
   for (std::size_t step = 0; step < refs.size(); ++step) {
     const auto input = controls[step];
@@ -199,20 +194,21 @@ double MppiCore::rollout(
     if (!std::isfinite(map.collision)) {
       return no_path;
     }
-    const double yaw = rotate_only ? ref.pose.yaw : map.yaw.value_or(ref.pose.yaw);
+    double yaw = ref.pose.yaw;
+    // Use the ordered route's heading when a nearby return leg has a different direction.
+    if (!rotate_only && map.yaw && std::abs(wrap(*map.yaw - yaw)) < pi / 3.0) {
+      yaw = *map.yaw;
+    }
     const double heading_error = wrap(pose.yaw - yaw);
     const double velocity_error = input.v * std::cos(heading_error) - ref.speed;
-    const double position_error = distance(pose, ref.pose);
+    const double tracking_error = distance(pose, ref.pose) + map.distance.value_or(0.0);
     cost += settings_.velocity_weight * square(velocity_error) +
       settings_.heading_weight * square(heading_error) +
-      settings_.distance_weight * map.distance.value_or(position_error) +
+      settings_.distance_weight * tracking_error +
       settings_.collision_weight * map.collision +
       settings_.control_change_weight[0] * square(input.v - previous.v) +
       settings_.control_change_weight[1] * square(input.omega - previous.omega);
     previous = input;
-    if (states) {
-      states->push_back(pose);
-    }
   }
   const auto & target = refs.back().pose;
   cost += settings_.terminal_weight *
@@ -221,7 +217,7 @@ double MppiCore::rollout(
 }
 
 std::optional<Solution> MppiCore::solve(
-  const Pose & pose, const VOmega & previous, const Costmap & costmap, std::size_t visible_samples)
+  const Pose & pose, const VOmega & previous, const Costmap & costmap)
 {
   if (route_.empty() || !finite(pose) || !std::isfinite(previous.v) || !std::isfinite(previous.omega)) {
     return std::nullopt;
@@ -231,11 +227,8 @@ std::optional<Solution> MppiCore::solve(
   const bool rotate_only = arc_.back() - progress_ <= 2.0 * settings_.xy_goal_tolerance &&
     distance(pose, goal) <= settings_.xy_goal_tolerance;
   if (rotate_only && std::abs(wrap(goal.yaw - pose.yaw)) <= settings_.yaw_goal_tolerance) {
-    Solution result;
-    result.goal_reached = true;
-    result.trajectory.push_back(pose);
     warm_ = false;
-    return result;
+    return Solution{{}, true};
   }
   const auto refs = references(pose, rotate_only);
   const auto tracking_seed = seed(pose, refs, rotate_only);
@@ -283,32 +276,15 @@ std::optional<Solution> MppiCore::solve(
     input = limit({input.v / total, input.omega / total}, rotate_only);
   }
 
-  Solution result;
-  result.cost = rollout(pose, previous, optimum.data(), refs, costmap, rotate_only, &result.trajectory);
-  if (!std::isfinite(result.cost)) {
+  if (!std::isfinite(rollout(pose, previous, optimum.data(), refs, costmap, rotate_only))) {
     // The mean of collision-free inputs can still produce a collision.
     const auto * feasible = controls_.data() + (best - costs_.begin()) * steps;
     std::copy_n(feasible, steps, optimum.begin());
-    result.trajectory.clear();
-    result.cost = rollout(pose, previous, optimum.data(), refs, costmap, rotate_only, &result.trajectory);
-  }
-  result.command = optimum.front();
-
-  if (visible_samples > 0) {
-    std::vector<std::size_t> order(costs_.size());
-    std::iota(order.begin(), order.end(), 0);
-    const auto count = std::min(visible_samples, order.size());
-    std::partial_sort(order.begin(), order.begin() + count, order.end(),
-      [this](std::size_t a, std::size_t b) {return costs_[a] < costs_[b];});
-    for (std::size_t i = 0; i < count && std::isfinite(costs_[order[i]]); ++i) {
-      auto & states = result.samples.emplace_back();
-      rollout(pose, previous, controls_.data() + order[i] * steps, refs, costmap, rotate_only, &states);
-    }
   }
 
   std::copy(optimum.begin() + 1, optimum.end(), nominal_.begin());
   nominal_.back() = optimum.back();
   warm_ = true;
-  return result;
+  return Solution{optimum.front(), false};
 }
 }  // namespace mppi_unicycle

@@ -1,5 +1,0 @@
-/**:
-  ros__parameters:
-    # SDL joystick index and repeat rate.
-    device_id: 0
-    autorepeat_rate: 20.0

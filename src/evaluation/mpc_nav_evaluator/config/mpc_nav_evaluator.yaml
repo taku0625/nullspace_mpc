@@ -1,5 +1,0 @@
-mpc_nav_evaluator:
-  ros__parameters:
-    mpc_eval_topic: /mpc/eval_info
-    goal_pose_topic: /goal_pose
-    goal_tolerance: 0.5

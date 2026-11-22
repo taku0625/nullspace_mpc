@@ -57,10 +57,7 @@ using Costmap = std::function<MapCost(const Pose &)>;
 struct Solution
 {
   VOmega command;
-  double cost{};
   bool goal_reached{};
-  std::vector<Pose> trajectory;
-  std::vector<std::vector<Pose>> samples;
 };
 
 double wrap(double angle);
@@ -74,8 +71,7 @@ public:
 
   void set_route(std::vector<Pose> route);
   std::optional<Solution> solve(
-    const Pose & pose, const VOmega & previous, const Costmap & costmap,
-    std::size_t visible_samples = 0);
+    const Pose & pose, const VOmega & previous, const Costmap & costmap);
 
 private:
   struct Reference
@@ -92,7 +88,7 @@ private:
     bool rotate_only) const;
   double rollout(
     Pose pose, VOmega previous, const VOmega * controls, const std::vector<Reference> & refs,
-    const Costmap & costmap, bool rotate_only, std::vector<Pose> * states = nullptr) const;
+    const Costmap & costmap, bool rotate_only) const;
 
   Settings settings_;
   std::mt19937 random_;

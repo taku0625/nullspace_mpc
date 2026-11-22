@@ -77,7 +77,9 @@ TEST(UnicycleMppi, KeepsPathOrderAtARevisitedStart)
   MppiCore controller(settings);
   const Pose start{};
   controller.set_route({start, {1.0, 0.0, 0.0}, {1.0, 0.5, pi}, {0.0, 0.0, pi}});
-  const auto result = controller.solve(start, {}, {});
+  const auto result = controller.solve(start, {}, [](const Pose &) {
+    return MapCost{0.0, 0.02, pi};
+  });
   ASSERT_TRUE(result);
   EXPECT_FALSE(result->goal_reached);
   EXPECT_GT(result->command.v, 0.0);

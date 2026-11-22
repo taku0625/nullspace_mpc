@@ -2,6 +2,7 @@
 #include "ros_inputs.hpp"
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -20,6 +21,8 @@ namespace
 using FollowPath = action::FollowPath;
 using Goal = rclcpp_action::ServerGoalHandle<FollowPath>;
 using Clock = std::chrono::steady_clock;
+constexpr auto distance_layer = "distance_error";
+constexpr auto yaw_layer = "ref_yaw";
 }  // namespace
 
 class RouteController : public rclcpp::Node
@@ -29,6 +32,7 @@ public:
   : Node("mppi_unicycle"),
     settings_(declare_settings(*this)), core_(settings_),
     base_(declare_parameter<std::string>("base_frame", "base_link")),
+    startup_timeout_(positive_parameter(*this, "startup_timeout", 2.0)),
     pose_timeout_(positive_parameter(*this, "pose_timeout", 0.4)),
     stall_timeout_(positive_parameter(*this, "stall_timeout", 8.0)),
     tf_(get_clock()), listener_(tf_, this, false)
@@ -40,7 +44,10 @@ public:
     server_ = rclcpp_action::create_server<FollowPath>(
       this, "follow_path",
       [this](const rclcpp_action::GoalUUID &, const std::shared_ptr<const FollowPath::Goal> goal) {
-        if (goal_ || pending_route_ || goal->path.header.frame_id == base_) {
+        const auto & header = goal->path.header;
+        if (goal_ || pending_route_ || header.frame_id != "map" || header.stamp.sec < 0 ||
+          header.stamp.nanosec >= 1000000000U)
+        {
           return rclcpp_action::GoalResponse::REJECT;
         }
         pending_route_ = path_poses(goal->path);
@@ -53,13 +60,28 @@ public:
       },
       [this](const std::shared_ptr<Goal> goal) {
         goal_ = goal;
-        frame_ = goal->get_goal()->path.header.frame_id;
+        route_stamp_ = rclcpp::Time(goal->get_goal()->path.header.stamp).nanoseconds();
         end_ = pending_route_->back();
         core_.set_route(std::move(*pending_route_));
         pending_route_.reset();
         localization_.reset();
         progress_pose_.reset();
         started_ = Clock::now();
+      });
+
+    reference_sub_ = create_subscription<grid_map_msgs::msg::GridMap>(
+      "reference_costmap", rclcpp::QoS(1).transient_local(),
+      [this](const grid_map_msgs::msg::GridMap & message) {
+        grid_map::GridMap map;
+        if (message.header.frame_id == "map" &&
+          grid_map::GridMapRosConverter::fromMessage(message, map) &&
+          map.exists(distance_layer) && map.exists(yaw_layer) && (map.getSize() > 0).all())
+        {
+          outside_reference_distance_ = map[distance_layer].maxCoeff();
+          reference_ = std::move(map);
+        } else {
+          reference_.reset();
+        }
       });
 
     const auto costmap_topic = declare_parameter<std::string>("collision_costmap_topic", "");
@@ -100,7 +122,7 @@ private:
   bool update_localization()
   {
     try {
-      const auto transform = tf_.lookupTransform(frame_, base_, tf2::TimePointZero);
+      const auto transform = tf_.lookupTransform("map", base_, tf2::TimePointZero);
       const auto pose = planar_pose(transform.transform);
       const auto & stamp = transform.header.stamp;
       if (!pose || stamp.sec < 0 || stamp.nanosec >= 1000000000U ||
@@ -148,11 +170,11 @@ private:
 
   std::optional<Pose> costmap_transform()
   {
-    if (!collision_sub_ || collision_.getFrameId() == frame_) {
+    if (!collision_sub_ || collision_.getFrameId() == "map") {
       return Pose{};
     }
     try {
-      return planar_pose(tf_.lookupTransform(collision_.getFrameId(), frame_,
+      return planar_pose(tf_.lookupTransform(collision_.getFrameId(), "map",
           tf2::TimePointZero).transform);
     } catch (const tf2::TransformException &) {
       return std::nullopt;
@@ -187,7 +209,7 @@ private:
   void wait_for_input(const std::string & message)
   {
     if (progress_pose_ ||
-      std::chrono::duration<double>(Clock::now() - started_).count() > pose_timeout_)
+      std::chrono::duration<double>(Clock::now() - started_).count() > startup_timeout_)
     {
       finish(message);
     } else {
@@ -202,6 +224,10 @@ private:
     }
     if (goal_->is_canceling()) {
       finish("Canceled the recorded route");
+      return;
+    }
+    if (!reference_ || reference_->getTimestamp() != route_stamp_) {
+      wait_for_input("The reference costmap for the recorded path is unavailable");
       return;
     }
     if (!update_localization() || !localization_->velocity) {
@@ -220,16 +246,28 @@ private:
 
     const auto & pose = localization_->pose;
     const auto & measured = *localization_->velocity;
-    Costmap evaluate_cost;
-    if (collision_sub_) {
-      const double c = std::cos(to_costmap->yaw), s = std::sin(to_costmap->yaw);
-      evaluate_cost = [this, to_costmap, c, s](const Pose & state) {
-          const grid_map::Position position(
+    const double c = std::cos(to_costmap->yaw), s = std::sin(to_costmap->yaw);
+    const auto & distances = (*reference_)[distance_layer];
+    const auto & headings = (*reference_)[yaw_layer];
+    const auto evaluate_cost = [&](const Pose & state) {
+        MapCost cost;
+        grid_map::Index cell;
+        if (reference_->getIndex({state.x, state.y}, cell)) {
+          cost.distance = distances(cell.x(), cell.y());
+          const auto heading = headings(cell.x(), cell.y());
+          if (std::isfinite(heading)) {
+            cost.yaw = heading;
+          }
+        } else {
+          cost.distance = outside_reference_distance_;
+        }
+        if (collision_sub_) {
+          cost.collision = collision_at(collision_, {
             to_costmap->x + c * state.x - s * state.y,
-            to_costmap->y + s * state.x + c * state.y);
-          return MapCost{collision_at(collision_, position), {}, {}};
-        };
-    }
+            to_costmap->y + s * state.x + c * state.y});
+        }
+        return cost;
+      };
 
     const auto result = core_.solve(pose, measured, evaluate_cost);
     if (!result) {
@@ -265,20 +303,23 @@ private:
   const Settings settings_;
   MppiCore core_;
   const std::string base_;
-  const double pose_timeout_, stall_timeout_;
+  const double startup_timeout_, pose_timeout_, stall_timeout_;
   double costmap_timeout_{};
   tf2_ros::Buffer tf_;
   tf2_ros::TransformListener listener_;
   std::shared_ptr<Goal> goal_;
   std::optional<std::vector<Pose>> pending_route_;
-  std::string frame_;
+  grid_map::Time route_stamp_{};
   Pose end_;
   std::optional<Localization> localization_;
   std::optional<Pose> progress_pose_;
   Clock::time_point started_, last_progress_;
+  std::optional<grid_map::GridMap> reference_;
+  double outside_reference_distance_{};
   grid_map::GridMap collision_;
   std::optional<Clock::time_point> collision_received_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_;
+  rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr reference_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr collision_sub_;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;
