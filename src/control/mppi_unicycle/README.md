@@ -3,10 +3,70 @@
 The recorded-route controller takes a `FollowPath` action and a matching
 `/reference_costmap` from the Misachiya navigation launch. It uses live
 `map → base_link` TF and publishes `geometry_msgs/msg/TwistStamped` to
-`/cmd_vel`. MPPI samples forward speed and angular velocity, limits the target
-wheel speeds, and maintains progress in path order at crossings.
+`/cmd_vel`. The action server stops the chassis on completion, cancellation,
+stale localization or collision data, and loss of route progress.
 
-The reference costmap contributes distance to the recorded path and the
-direction of the nearest segment. A live occupancy grid can supply collision
-costs. The action server stops the chassis on completion, cancellation, stale
-localization or collision data, and loss of route progress.
+## Solver
+
+The solver is the MPPI of the original `mppi_3d` package with the state
+`(x, y, yaw)` and the two inputs `(v, omega)` of a unicycle:
+
+1. Gaussian noise is drawn for every sample and step. The samples add it to
+   the solution of the previous cycle; the `exploration` share of them adds it
+   to zero input.
+2. The rollouts run in parallel with OpenMP. Each one sums the stage cost, the
+   input cost `lambda * (1 - alpha) * u' * inv(Sigma) * v` and the terminal cost.
+3. The noise of each sample is weighted by `exp(-(cost - lowest cost) / lambda)`
+   and added to the previous solution.
+4. A Savitzky-Golay filter over the past commands and the planned inputs
+   smooths the command, and the inputs are limited.
+
+`OMP_NUM_THREADS` sets the number of threads. The commands do not depend on it.
+
+| Parameter | `mppi_3d` name |
+| --- | --- |
+| `samples`, `prediction_steps`, `prediction_step` | `num_samples`, `prediction_horizon`, `step_len_sec` |
+| `exploration`, `lambda`, `alpha`, `sigma` | `param_exploration`, `param_lambda`, `param_alpha`, `sigma` |
+| `reduce_computation` | `reduce_computation` |
+| `reference_speed` | `reference_velocity` |
+| `velocity_weight`, `heading_weight` | `weight_velocity_error`, `weight_angular_error` |
+| `distance_weight`, `collision_weight` | `weight_distance_error_penalty`, `weight_collision_penalty` |
+| `terminal_weight`, `control_change_weight` | `weight_terminal_state_penalty`, `weight_cmd_change` |
+| `use_sg_filter`, `sg_filter_half_window_size`, `sg_filter_poly_order` | same names |
+
+The wheel speeds of a differential drive are a linear function of `(v, omega)`,
+so `control_change_weight` also covers `weight_vehicle_cmd_change`.
+
+## Cost for a unicycle on a recorded route
+
+The stage cost keeps the terms of `mppi_3d`: the speed along the reference
+direction, the heading error to it, the distance to the path read from the
+`distance_error` layer of the reference costmap, the collision cost and the
+change of the inputs. The terminal cost is the squared distance to the goal
+state. These parts differ:
+
+- The reference direction points from the predicted pose to the route
+  `2 * xy_goal_tolerance` ahead of its nearest route point, in path order. The
+  `ref_yaw` layer holds the direction of the nearest segment of the whole
+  recording. It is ambiguous where the recording passes a place twice, and it
+  jumps at a corner recorded as a turn in place, where a unicycle would stop.
+- The goal state of the terminal cost is the route position that the reference
+  speed reaches within the horizon. Near the end of the route it is the goal.
+- Within `xy_goal_tolerance` of the goal the heading error refers to the goal
+  yaw, and the robot turns in place until it is within `yaw_goal_tolerance`.
+- The inputs keep `v` between zero and `max_linear_speed`, `omega` within
+  `max_angular_speed` and both wheels within the wheel speed limits.
+- A predicted pose on a lethal or unknown collision cell rejects its sample.
+  The action aborts when every sample is rejected.
+
+## Visualization
+
+While a route is followed, the node publishes in the `map` frame:
+
+| Topic | Type | Content |
+| --- | --- | --- |
+| `/mpc/optimal_traj` | `visualization_msgs/msg/MarkerArray` | Predicted poses of the optimal inputs as red arrows |
+| `/mpc/sampled_traj` | `visualization_msgs/msg/MarkerArray` | The 100 sampled trajectories of lowest cost as blue lines |
+| `/mpc/calc_time` | `std_msgs/msg/Float32` | Duration of the last solve in milliseconds |
+
+The marker arrays are built only while they have a subscriber.

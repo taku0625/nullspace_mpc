@@ -7,13 +7,16 @@
 #include <misachiya_drive/msg/drive_state.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace mppi_unicycle
 {
@@ -23,8 +26,24 @@ using FollowPath = action::FollowPath;
 using Goal = rclcpp_action::ServerGoalHandle<FollowPath>;
 using Clock = std::chrono::steady_clock;
 using DriveState = misachiya_drive::msg::DriveState;
+using Marker = visualization_msgs::msg::Marker;
+using MarkerArray = visualization_msgs::msg::MarkerArray;
 constexpr auto distance_layer = "distance_error";
-constexpr auto yaw_layer = "ref_yaw";
+constexpr std::size_t visualized_samples = 100;
+
+Marker prediction_marker(const rclcpp::Time & stamp, const char * name, int id)
+{
+  Marker marker;
+  marker.header.frame_id = "map";
+  marker.header.stamp = stamp;
+  marker.ns = name;
+  marker.id = id;
+  marker.action = Marker::ADD;
+  marker.pose.orientation.w = 1.0;
+  // The markers disappear when the controller stops solving.
+  marker.lifetime.nanosec = 300000000U;
+  return marker;
+}
 }  // namespace
 
 class RouteController : public rclcpp::Node
@@ -45,6 +64,9 @@ public:
       throw std::invalid_argument("Set a valid base_frame");
     }
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
+    optimal_trajectory_ = create_publisher<MarkerArray>("mpc/optimal_traj", 1);
+    sampled_trajectories_ = create_publisher<MarkerArray>("mpc/sampled_traj", 1);
+    calculation_time_ = create_publisher<std_msgs::msg::Float32>("mpc/calc_time", 1);
     server_ = rclcpp_action::create_server<FollowPath>(
       this, "follow_path",
       [this](const rclcpp_action::GoalUUID &, const std::shared_ptr<const FollowPath::Goal> goal) {
@@ -79,7 +101,7 @@ public:
         grid_map::GridMap map;
         if (message.header.frame_id == "map" &&
           grid_map::GridMapRosConverter::fromMessage(message, map) &&
-          map.exists(distance_layer) && map.exists(yaw_layer) && (map.getSize() > 0).all())
+          map.exists(distance_layer) && (map.getSize() > 0).all())
         {
           outside_reference_distance_ = map[distance_layer].maxCoeff();
           reference_ = std::move(map);
@@ -233,6 +255,62 @@ private:
     command_->publish(command);
   }
 
+  void publish_predictions()
+  {
+    const auto & optimal = core_.optimal_trajectory();
+    if (optimal.empty()) {
+      return;
+    }
+    std_msgs::msg::Float32 time;
+    time.data = static_cast<float>(core_.calculation_time_ms());
+    calculation_time_->publish(time);
+
+    const rclcpp::Time stamp = now();
+    if (optimal_trajectory_->get_subscription_count() > 0) {
+      MarkerArray arrows;
+      arrows.markers.reserve(optimal.size());
+      for (const auto & pose : optimal) {
+        auto arrow = prediction_marker(
+          stamp, "optimal_trajectory", static_cast<int>(arrows.markers.size()));
+        arrow.type = Marker::ARROW;
+        arrow.pose.position.x = pose.x;
+        arrow.pose.position.y = pose.y;
+        arrow.pose.position.z = 0.02;
+        arrow.pose.orientation.z = std::sin(0.5 * pose.yaw);
+        arrow.pose.orientation.w = std::cos(0.5 * pose.yaw);
+        arrow.scale.x = 0.04;
+        arrow.scale.y = 0.012;
+        arrow.scale.z = 0.012;
+        arrow.color.r = 1.0f;
+        arrow.color.a = 1.0f;
+        arrows.markers.push_back(arrow);
+      }
+      optimal_trajectory_->publish(arrows);
+    }
+    if (sampled_trajectories_->get_subscription_count() > 0) {
+      MarkerArray lines;
+      for (const auto & trajectory : core_.elite_trajectories(visualized_samples)) {
+        auto line = prediction_marker(
+          stamp, "sampled_trajectories", static_cast<int>(lines.markers.size()));
+        line.type = Marker::LINE_STRIP;
+        line.scale.x = 0.004;
+        line.color.g = 0.35f;
+        line.color.b = 1.0f;
+        line.color.a = 0.5f;
+        line.points.reserve(trajectory.size());
+        for (const auto & pose : trajectory) {
+          geometry_msgs::msg::Point point;
+          point.x = pose.x;
+          point.y = pose.y;
+          point.z = 0.01;
+          line.points.push_back(point);
+        }
+        lines.markers.push_back(line);
+      }
+      sampled_trajectories_->publish(lines);
+    }
+  }
+
   void finish(const std::string & message, bool reached = false)
   {
     publish();
@@ -297,20 +375,14 @@ private:
     const auto & pose = localization_->pose;
     const auto & measured = *localization_->velocity;
     const double c = std::cos(to_costmap->yaw), s = std::sin(to_costmap->yaw);
-    const auto & distances = (*reference_)[distance_layer];
-    const auto & headings = (*reference_)[yaw_layer];
+    // The solver calls this from its rollout threads. It only reads the maps.
     const auto evaluate_cost = [&](const Pose & state) {
         MapCost cost;
-        grid_map::Index cell;
-        if (reference_->getIndex({state.x, state.y}, cell)) {
-          cost.distance = distances(cell.x(), cell.y());
-          const auto heading = headings(cell.x(), cell.y());
-          if (std::isfinite(heading)) {
-            cost.yaw = heading;
-          }
-        } else {
-          cost.distance = outside_reference_distance_;
-        }
+        const grid_map::Position position(state.x, state.y);
+        cost.distance = reference_->isInside(position) ?
+          reference_->atPosition(
+          distance_layer, position, grid_map::InterpolationMethods::INTER_LINEAR) :
+          outside_reference_distance_;
         if (collision_sub_) {
           cost.collision = collision_at(collision_, {
             to_costmap->x + c * state.x - s * state.y,
@@ -324,6 +396,7 @@ private:
       finish("MPPI did not find a feasible trajectory");
       return;
     }
+    publish_predictions();
     if (!fresh_localization() || !fresh_costmap() || !fresh_drive_state()) {
       finish("A navigation input expired during optimization");
       return;
@@ -371,6 +444,8 @@ private:
   std::optional<Clock::time_point> collision_received_;
   std::optional<DriveState> drive_state_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr optimal_trajectory_, sampled_trajectories_;
+  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr calculation_time_;
   rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr reference_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr collision_sub_;
   rclcpp::Subscription<DriveState>::SharedPtr drive_sub_;

@@ -22,7 +22,11 @@ inline Settings declare_settings(rclcpp::Node & node)
   settings.samples = node.declare_parameter("samples", settings.samples);
   settings.prediction_steps = node.declare_parameter("prediction_steps", settings.prediction_steps);
   settings.prediction_step = node.declare_parameter("prediction_step", settings.prediction_step);
+  settings.exploration = node.declare_parameter("exploration", settings.exploration);
   settings.lambda = node.declare_parameter("lambda", settings.lambda);
+  settings.alpha = node.declare_parameter("alpha", settings.alpha);
+  settings.reduce_computation = node.declare_parameter(
+    "reduce_computation", settings.reduce_computation);
   settings.max_linear_speed = node.declare_parameter("max_linear_speed", settings.max_linear_speed);
   settings.max_angular_speed = node.declare_parameter("max_angular_speed", settings.max_angular_speed);
   settings.reference_speed = node.declare_parameter("reference_speed", settings.reference_speed);
@@ -35,6 +39,11 @@ inline Settings declare_settings(rclcpp::Node & node)
   settings.distance_weight = node.declare_parameter("distance_weight", settings.distance_weight);
   settings.collision_weight = node.declare_parameter("collision_weight", settings.collision_weight);
   settings.terminal_weight = node.declare_parameter("terminal_weight", settings.terminal_weight);
+  settings.use_sg_filter = node.declare_parameter("use_sg_filter", settings.use_sg_filter);
+  settings.sg_filter_half_window_size = node.declare_parameter(
+    "sg_filter_half_window_size", settings.sg_filter_half_window_size);
+  settings.sg_filter_poly_order = node.declare_parameter(
+    "sg_filter_poly_order", settings.sg_filter_poly_order);
 
   auto pair = [&node](const std::string & name, std::array<double, 2> defaults) {
       const auto value = node.declare_parameter(name, std::vector<double>{defaults[0], defaults[1]});

@@ -1,8 +1,11 @@
 #include "mppi_unicycle/core.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <numeric>
+#include <random>
 #include <stdexcept>
 
 namespace mppi_unicycle
@@ -21,6 +24,24 @@ bool finite(const Pose & pose)
 {
   return std::isfinite(pose.x) && std::isfinite(pose.y) && std::isfinite(pose.yaw);
 }
+
+std::uint64_t mix(std::uint64_t value)
+{
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
+
+// SplitMix64. Its state is one integer, so every sample can run its own stream. The noise is
+// then drawn in parallel and does not depend on the number of threads.
+struct SampleRandom
+{
+  using result_type = std::uint64_t;
+  static constexpr result_type min() {return 0;}
+  static constexpr result_type max() {return std::numeric_limits<result_type>::max();}
+  result_type operator()() {return mix(state += 0x9e3779b97f4a7c15ULL);}
+  result_type state;
+};
 }  // namespace
 
 double wrap(double angle)
@@ -42,8 +63,74 @@ Pose advance(const Pose & pose, const VOmega & input, double dt)
   };
 }
 
+std::vector<double> savitzky_golay_coefficients(int half_window, int order)
+{
+  if (half_window < 1 || order < 0 || order > 2 * half_window) {
+    throw std::invalid_argument(
+            "The Savitzky-Golay filter needs a half window of at least one sample and a "
+            "polynomial order of at most twice the half window");
+  }
+  const int terms = order + 1;
+  const int window = 2 * half_window + 1;
+  // Sample positions scaled to [-1, 1] keep the normal equations well conditioned.
+  std::vector<double> positions(window);
+  for (int i = 0; i < window; ++i) {
+    positions[i] = static_cast<double>(i - half_window) / half_window;
+  }
+
+  // Solve (X^T X) z = e_0 for the Vandermonde matrix X of the positions. The weights are X z.
+  std::vector<double> matrix(terms * terms, 0.0);
+  std::vector<double> z(terms, 0.0);
+  z[0] = 1.0;
+  std::vector<double> powers(2 * terms - 1);
+  for (const double position : positions) {
+    powers[0] = 1.0;
+    for (std::size_t i = 1; i < powers.size(); ++i) {
+      powers[i] = powers[i - 1] * position;
+    }
+    for (int row = 0; row < terms; ++row) {
+      for (int column = 0; column < terms; ++column) {
+        matrix[row * terms + column] += powers[row + column];
+      }
+    }
+  }
+  for (int column = 0; column < terms; ++column) {
+    int pivot = column;
+    for (int row = column + 1; row < terms; ++row) {
+      if (std::abs(matrix[row * terms + column]) > std::abs(matrix[pivot * terms + column])) {
+        pivot = row;
+      }
+    }
+    std::swap_ranges(
+      matrix.begin() + pivot * terms, matrix.begin() + (pivot + 1) * terms,
+      matrix.begin() + column * terms);
+    std::swap(z[pivot], z[column]);
+    for (int row = column + 1; row < terms; ++row) {
+      const double factor = matrix[row * terms + column] / matrix[column * terms + column];
+      for (int i = column; i < terms; ++i) {
+        matrix[row * terms + i] -= factor * matrix[column * terms + i];
+      }
+      z[row] -= factor * z[column];
+    }
+  }
+  for (int row = terms - 1; row >= 0; --row) {
+    for (int i = row + 1; i < terms; ++i) {
+      z[row] -= matrix[row * terms + i] * z[i];
+    }
+    z[row] /= matrix[row * terms + row];
+  }
+
+  std::vector<double> weights(window);
+  for (int i = 0; i < window; ++i) {
+    for (int term = terms - 1; term >= 0; --term) {
+      weights[i] = weights[i] * positions[i] + z[term];
+    }
+  }
+  return weights;
+}
+
 MppiCore::MppiCore(Settings settings)
-: settings_(settings), random_(settings.random_seed)
+: settings_(settings)
 {
   const std::array positive{
     settings.prediction_step, settings.sigma[0], settings.sigma[1], settings.lambda,
@@ -59,13 +146,28 @@ MppiCore::MppiCore(Settings settings)
     !std::all_of(positive.begin(), positive.end(),
       [](double value) {return std::isfinite(value) && value > 0.0;}) ||
     !std::all_of(nonnegative.begin(), nonnegative.end(),
-      [](double value) {return std::isfinite(value) && value >= 0.0;}))
+      [](double value) {return std::isfinite(value) && value >= 0.0;}) ||
+    !(settings.exploration >= 0.0 && settings.exploration <= 1.0) ||
+    !(settings.alpha >= 0.0 && settings.alpha <= 1.0))
   {
     throw std::invalid_argument("Invalid MPPI horizon, noise, limits or cost weights");
   }
-  nominal_.resize(settings.prediction_steps);
-  controls_.resize(static_cast<std::size_t>(settings.samples) * settings.prediction_steps);
+  if (settings.use_sg_filter) {
+    if (settings.sg_filter_half_window_size >= settings.prediction_steps) {
+      throw std::invalid_argument(
+              "The Savitzky-Golay half window must be shorter than the prediction horizon");
+    }
+    filter_coefficients_ = savitzky_golay_coefficients(
+      settings.sg_filter_half_window_size, settings.sg_filter_poly_order);
+    filter_history_.resize(settings.sg_filter_half_window_size);
+  }
+  const auto size = static_cast<std::size_t>(settings.samples) * settings.prediction_steps;
+  noise_.resize(size);
+  controls_.resize(size);
+  states_.resize(size);
   costs_.resize(settings.samples);
+  nominal_.resize(settings.prediction_steps);
+  sample_noise();
 }
 
 bool MppiCore::set_wheel_speed_limits(double minimum, double maximum)
@@ -79,7 +181,7 @@ bool MppiCore::set_wheel_speed_limits(double minimum, double maximum)
     wheel_min_speed_ = minimum;
     settings_.wheel_speed_limit = maximum;
     alignment_direction_ = 0.0;
-    warm_ = false;
+    reset();
   }
   return true;
 }
@@ -102,7 +204,7 @@ void MppiCore::set_route(std::vector<Pose> route)
   }
   progress_ = 0.0;
   alignment_direction_ = 0.0;
-  warm_ = false;
+  reset();
 }
 
 Pose MppiCore::pose_at(double arc) const
@@ -168,85 +270,160 @@ VOmega MppiCore::limit(VOmega input, bool rotate_only) const
   return input;
 }
 
-std::vector<MppiCore::Reference> MppiCore::references(const Pose & pose, bool rotate_only) const
+MppiCore::Tracking MppiCore::track(bool rotate_only) const
 {
-  std::vector<Reference> result;
-  result.reserve(settings_.prediction_steps);
-  double arc = progress_;
-  const auto & goal = route_.back();
-  const double goal_distance = distance(pose, goal);
-  for (int step = 0; step < settings_.prediction_steps; ++step) {
-    const double remaining = std::max(arc_.back() - arc, goal_distance - (arc - progress_));
-    const double speed = rotate_only ? 0.0 :
-      std::min({settings_.reference_speed, settings_.max_linear_speed, std::sqrt(1.2 * remaining)});
-    arc = std::min(arc + speed * settings_.prediction_step, arc_.back());
-    auto target = rotate_only ? goal : pose_at(arc);
-    if (!rotate_only && arc >= arc_.back()) {
-      target.yaw = std::atan2(goal.y - pose.y, goal.x - pose.x);
-    }
-    result.push_back({target, speed});
+  const double horizon = settings_.prediction_steps * settings_.prediction_step;
+  const double reach = std::min(settings_.reference_speed, settings_.max_linear_speed) * horizon;
+  Tracking tracking{
+    rotate_only, rotate_only || arc_.back() - progress_ <= reach, pose_at(progress_ + reach),
+    2.0 * settings_.xy_goal_tolerance, {}};
+  const double end = progress_ + settings_.max_linear_speed * horizon + tracking.lookahead;
+  auto segment = std::min<std::size_t>(
+    std::upper_bound(arc_.begin(), arc_.end(), progress_) - arc_.begin(), arc_.size() - 1);
+  for (; segment > 0 && segment < arc_.size() && arc_[segment - 1] <= end; ++segment) {
+    const auto & a = route_[segment - 1];
+    const auto & b = route_[segment];
+    const double length = arc_[segment] - arc_[segment - 1];
+    tracking.window.push_back({a.x, a.y, b.x - a.x, b.y - a.y, length});
   }
-  return result;
+  return tracking;
 }
 
-std::vector<VOmega> MppiCore::seed(
-  const Pose & initial, const std::vector<Reference> & refs, bool rotate_only) const
+void MppiCore::sample_noise()
 {
-  std::vector<VOmega> profile;
-  profile.reserve(refs.size());
-  Pose pose = initial;
-  for (const auto & ref : refs) {
-    const double error = distance(pose, ref.pose);
-    const double target_yaw = rotate_only || error < settings_.xy_goal_tolerance / 2.0 ?
-      ref.pose.yaw : std::atan2(ref.pose.y - pose.y, ref.pose.x - pose.x);
-    const double turn = wrap(target_yaw - pose.yaw);
-    const VOmega input = limit(
-      {ref.speed * std::max(0.0, std::cos(turn)), 3.0 * turn}, rotate_only);
-    profile.push_back(input);
-    pose = advance(pose, input, settings_.prediction_step);
+  const int steps = settings_.prediction_steps;
+  const std::uint64_t draw = mix(mix(settings_.random_seed) + noise_draws_++);
+  #pragma omp parallel for schedule(static)
+  for (int sample = 0; sample < settings_.samples; ++sample) {
+    SampleRandom random{mix(draw + static_cast<std::uint64_t>(sample))};
+    std::normal_distribution<double> v_noise(0.0, settings_.sigma[0]);
+    std::normal_distribution<double> omega_noise(0.0, settings_.sigma[1]);
+    auto * noise = noise_.data() + static_cast<std::size_t>(sample) * steps;
+    for (int step = 0; step < steps; ++step) {
+      noise[step].v = v_noise(random);
+      noise[step].omega = omega_noise(random);
+    }
   }
-  return profile;
+}
+
+double MppiCore::stage_cost(
+  const Pose & state, const VOmega & input, const VOmega & previous, const Tracking & tracking,
+  const Costmap & costmap) const
+{
+  const auto map = costmap ? costmap(state) : MapCost{};
+  const auto & goal = route_.back();
+  const double goal_distance = distance(state, goal);
+
+  // Nearest point of the route section ahead of the robot.
+  double route_distance = goal_distance;
+  Pose ahead = goal;
+  if (!tracking.window.empty()) {
+    std::size_t nearest = 0;
+    double along = 0.0;
+    double closest = no_path;
+    for (std::size_t i = 0; i < tracking.window.size(); ++i) {
+      const auto & segment = tracking.window[i];
+      const double x = state.x - segment.x, y = state.y - segment.y;
+      const double ratio = std::clamp(
+        (x * segment.dx + y * segment.dy) / square(segment.length), 0.0, 1.0);
+      const double error = square(x - ratio * segment.dx) + square(y - ratio * segment.dy);
+      if (error < closest) {
+        closest = error;
+        nearest = i;
+        along = ratio * segment.length;
+      }
+    }
+    route_distance = std::sqrt(closest);
+    // Walk the lookahead distance along the route from there.
+    along += tracking.lookahead;
+    while (along > tracking.window[nearest].length && nearest + 1 < tracking.window.size()) {
+      along -= tracking.window[nearest++].length;
+    }
+    const auto & segment = tracking.window[nearest];
+    const double ratio = std::min(along / segment.length, 1.0);
+    ahead = {segment.x + ratio * segment.dx, segment.y + ratio * segment.dy,
+      std::atan2(segment.dy, segment.dx)};
+  }
+
+  double cost = 0.0;
+  if (tracking.goal_in_reach && goal_distance <= settings_.xy_goal_tolerance) {
+    // A unicycle cannot correct its heading after it stops, so it turns to the goal yaw here.
+    cost += settings_.heading_weight * square(wrap(state.yaw - goal.yaw));
+  } else {
+    // The reference direction points at the route ahead. It follows the order of the route where
+    // the recording passes the same place twice, and it turns gradually before a corner
+    // recorded as a turn in place, where the direction of the nearest segment would jump.
+    const double yaw = distance(state, ahead) > 1e-6 ?
+      std::atan2(ahead.y - state.y, ahead.x - state.x) : ahead.yaw;
+    const double heading_error = wrap(state.yaw - yaw);
+    const double speed = std::min(settings_.reference_speed, settings_.max_linear_speed);
+    cost += settings_.velocity_weight * square(input.v * std::cos(heading_error) - speed) +
+      settings_.heading_weight * square(heading_error);
+  }
+  return cost + settings_.collision_weight * map.collision +
+         settings_.distance_weight * map.distance.value_or(route_distance) +
+         settings_.control_change_weight[0] * square(input.v - previous.v) +
+         settings_.control_change_weight[1] * square(input.omega - previous.omega);
 }
 
 double MppiCore::rollout(
-  Pose pose, VOmega previous, const VOmega * controls, const std::vector<Reference> & refs,
-  const Costmap & costmap, bool rotate_only) const
+  Pose state, const VOmega * controls, Pose * states, const Tracking & tracking,
+  const Costmap & costmap) const
 {
+  const double input_weight = settings_.lambda * (1.0 - settings_.alpha);
+  VOmega previous = last_command_;
   double cost = 0.0;
-  for (std::size_t step = 0; step < refs.size(); ++step) {
-    const auto input = controls[step];
-    pose = advance(pose, input, settings_.prediction_step);
-    const auto & ref = refs[step];
-    const auto map = costmap ? costmap(pose) : MapCost{};
-    if (!std::isfinite(map.collision)) {
-      return no_path;
+  for (int step = 0; step < settings_.prediction_steps; ++step) {
+    const auto & input = controls[step];
+    state = advance(state, input, settings_.prediction_step);
+    if (states) {
+      states[step] = state;
     }
-    double yaw = ref.pose.yaw;
-    // Use the ordered route's heading when a nearby return leg has a different direction.
-    if (!rotate_only && map.yaw && std::abs(wrap(*map.yaw - yaw)) < pi / 3.0) {
-      yaw = *map.yaw;
-    }
-    const double heading_error = wrap(pose.yaw - yaw);
-    const double velocity_error = input.v * std::cos(heading_error) - ref.speed;
-    const double tracking_error = distance(pose, ref.pose) + map.distance.value_or(0.0);
-    cost += settings_.velocity_weight * square(velocity_error) +
-      settings_.heading_weight * square(heading_error) +
-      settings_.distance_weight * tracking_error +
-      settings_.collision_weight * map.collision +
-      settings_.control_change_weight[0] * square(input.v - previous.v) +
-      settings_.control_change_weight[1] * square(input.omega - previous.omega);
+    cost += stage_cost(state, input, previous, tracking, costmap) +
+      input_weight * (nominal_[step].v * input.v / settings_.sigma[0] +
+      nominal_[step].omega * input.omega / settings_.sigma[1]);
     previous = input;
   }
-  const auto & target = refs.back().pose;
-  cost += settings_.terminal_weight *
-    (square(distance(pose, target)) + 0.25 * square(wrap(pose.yaw - target.yaw)));
+  const double error = distance(state, tracking.target);
+  if (error > settings_.xy_goal_tolerance) {
+    cost += settings_.terminal_weight * square(error);
+  }
+  // A lethal or unknown cell makes the cost infinite or, with a zero weight, not a number.
   return std::isfinite(cost) ? cost : no_path;
 }
 
-std::optional<Solution> MppiCore::solve(
-  const Pose & pose, const VOmega & previous, const Costmap & costmap)
+VOmega MppiCore::smooth(const std::vector<VOmega> & controls)
 {
-  if (route_.empty() || !finite(pose) || !std::isfinite(previous.v) || !std::isfinite(previous.omega)) {
+  // The window holds the past commands, the new command and the inputs planned after it.
+  const std::size_t half = filter_history_.size();
+  VOmega filtered;
+  for (std::size_t i = 0; i < filter_coefficients_.size(); ++i) {
+    const auto & input = i < half ? filter_history_[i] : controls[i - half];
+    filtered.v += filter_coefficients_[i] * input.v;
+    filtered.omega += filter_coefficients_[i] * input.omega;
+  }
+  std::rotate(filter_history_.begin(), filter_history_.begin() + 1, filter_history_.end());
+  filter_history_.back() = filtered;
+  return filtered;
+}
+
+void MppiCore::reset()
+{
+  // With an ESC floor the plan starts at the slowest forward speed. Around zero input every
+  // sample would be raised to that same speed, and their costs would not tell them apart.
+  std::fill(nominal_.begin(), nominal_.end(), limit({}, false));
+  std::fill(filter_history_.begin(), filter_history_.end(), VOmega{});
+  last_command_ = {};
+}
+
+std::optional<Solution> MppiCore::solve(
+  const Pose & pose, const VOmega & measured, const Costmap & costmap)
+{
+  const auto started = std::chrono::steady_clock::now();
+  optimal_.clear();
+  if (route_.empty() || !finite(pose) || !std::isfinite(measured.v) ||
+    !std::isfinite(measured.omega))
+  {
     return std::nullopt;
   }
   update_progress(pose);
@@ -254,7 +431,7 @@ std::optional<Solution> MppiCore::solve(
   const bool rotate_only = arc_.back() - progress_ <= 2.0 * settings_.xy_goal_tolerance &&
     distance(pose, goal) <= settings_.xy_goal_tolerance;
   if (rotate_only && std::abs(wrap(goal.yaw - pose.yaw)) <= settings_.yaw_goal_tolerance) {
-    warm_ = false;
+    reset();
     return Solution{{}, true};
   }
   if (wheel_min_speed_ > 0.0) {
@@ -265,11 +442,11 @@ std::optional<Solution> MppiCore::solve(
     // Keep the same turn until aligned so the ESCs can complete acquisition.
     const double align_threshold = alignment_direction_ == 0.0 ? pi / 4.0 : pi / 8.0;
     if (rotate_only || std::abs(error) > align_threshold) {
-      warm_ = false;
+      reset();
       if (alignment_direction_ == 0.0 || std::abs(error) < pi - 0.10) {
         alignment_direction_ = std::copysign(1.0, error);
       }
-      if (std::abs(previous.v) > 0.5 * wheel_min_speed_) {
+      if (std::abs(measured.v) > 0.5 * wheel_min_speed_) {
         return Solution{};
       }
       const double half_track = 0.5 * settings_.track_width;
@@ -284,71 +461,107 @@ std::optional<Solution> MppiCore::solve(
     }
     alignment_direction_ = 0.0;
   }
-  const auto refs = references(pose, rotate_only);
-  const auto tracking_seed = seed(pose, refs, rotate_only);
-  if (!warm_) {
-    nominal_ = tracking_seed;
+
+  const auto tracking = track(rotate_only);
+  const int samples = settings_.samples;
+  const int steps = settings_.prediction_steps;
+  if (!settings_.reduce_computation) {
+    sample_noise();
   }
 
-  const std::size_t steps = refs.size();
-  std::normal_distribution<double> v_noise(0.0, settings_.sigma[0]);
-  std::normal_distribution<double> yaw_noise(0.0, settings_.sigma[1]);
-  for (std::size_t sample = 0; sample < costs_.size(); ++sample) {
-    auto * input = controls_.data() + sample * steps;
-    for (std::size_t step = 0; step < steps; ++step) {
-      if (sample == 2) {
-        input[step] = {};
-        continue;
+  // Sample around the previous solution, and around zero input for the exploring share.
+  const int exploiting = static_cast<int>((1.0 - settings_.exploration) * samples);
+  #pragma omp parallel for schedule(static)
+  for (int sample = 0; sample < samples; ++sample) {
+    const auto row = static_cast<std::size_t>(sample) * steps;
+    for (int step = 0; step < steps; ++step) {
+      VOmega input = noise_[row + step];
+      if (sample < exploiting) {
+        input.v += nominal_[step].v;
+        input.omega += nominal_[step].omega;
       }
-      VOmega candidate = nominal_[step];
-      if (sample == 1) {
-        candidate = tracking_seed[step];
-      } else if (sample > 2) {
-        candidate.v += v_noise(random_);
-        candidate.omega += yaw_noise(random_);
-      }
-      input[step] = limit(candidate, rotate_only);
+      controls_[row + step] = limit(input, rotate_only);
     }
-    costs_[sample] = rollout(pose, previous, input, refs, costmap, rotate_only);
+    costs_[sample] = rollout(
+      pose, controls_.data() + row, states_.data() + row, tracking, costmap);
   }
 
   const auto best = std::min_element(costs_.begin(), costs_.end());
   if (!std::isfinite(*best)) {
-    warm_ = false;
+    reset();
     return std::nullopt;
   }
-  if (wheel_min_speed_ > 0.0 && best == costs_.begin() + 2) {
-    warm_ = false;
-    return Solution{};
+  bool stop = false;
+  if (wheel_min_speed_ > 0.0) {
+    // Every sample keeps both wheels above the ESC floor, so stopping is compared separately.
+    const std::vector<VOmega> stopped(steps);
+    stop = rollout(pose, stopped.data(), nullptr, tracking, costmap) < *best;
   }
-  std::vector<VOmega> optimum(steps);
+
+  // Add the noise of each sample to the previous solution, weighted by its cost.
   double total = 0.0;
-  for (std::size_t sample = 0; sample < costs_.size(); ++sample) {
-    // A blend of moving and stopped profiles could command unsupported wheel speeds.
-    if (wheel_min_speed_ > 0.0 && sample == 2) {
-      continue;
+  for (const double cost : costs_) {
+    total += std::exp(-(cost - *best) / settings_.lambda);
+  }
+  auto optimum = nominal_;
+  for (int sample = 0; sample < samples; ++sample) {
+    const double weight = std::exp(-(costs_[sample] - *best) / settings_.lambda) / total;
+    const auto * noise = noise_.data() + static_cast<std::size_t>(sample) * steps;
+    for (int step = 0; step < steps; ++step) {
+      optimum[step].v += weight * noise[step].v;
+      optimum[step].omega += weight * noise[step].omega;
     }
-    const double weight = std::exp(-((costs_[sample] - *best) / settings_.lambda));
-    total += weight;
-    for (std::size_t step = 0; step < steps; ++step) {
-      const auto & input = controls_[sample * steps + step];
-      optimum[step].v += weight * input.v;
-      optimum[step].omega += weight * input.omega;
-    }
+  }
+  if (settings_.use_sg_filter) {
+    optimum.front() = smooth(optimum);
   }
   for (auto & input : optimum) {
-    input = limit({input.v / total, input.omega / total}, rotate_only);
+    input = limit(input, rotate_only);
   }
 
-  if (!std::isfinite(rollout(pose, previous, optimum.data(), refs, costmap, rotate_only))) {
-    // The mean of collision-free inputs can still produce a collision.
-    const auto * feasible = controls_.data() + (best - costs_.begin()) * steps;
-    std::copy_n(feasible, steps, optimum.begin());
+  optimal_.resize(steps + 1);
+  optimal_.front() = pose;
+  if (!std::isfinite(rollout(pose, optimum.data(), optimal_.data() + 1, tracking, costmap))) {
+    // The weighted mean of collision-free inputs can still produce a collision.
+    const auto row = static_cast<std::size_t>(best - costs_.begin()) * steps;
+    std::copy_n(controls_.begin() + row, steps, optimum.begin());
+    std::copy_n(states_.begin() + row, steps, optimal_.begin() + 1);
   }
 
-  std::copy(optimum.begin() + 1, optimum.end(), nominal_.begin());
-  nominal_.back() = optimum.back();
-  warm_ = true;
-  return Solution{optimum.front(), false};
+  // While stopping costs less than every sample, the robot waits and the plan keeps improving.
+  last_command_ = stop ? VOmega{} : optimum.front();
+  nominal_ = std::move(optimum);
+  calculation_time_ms_ = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - started).count();
+  return Solution{last_command_, false};
+}
+
+const std::vector<Pose> & MppiCore::optimal_trajectory() const
+{
+  return optimal_;
+}
+
+std::vector<std::vector<Pose>> MppiCore::elite_trajectories(std::size_t count) const
+{
+  std::vector<std::vector<Pose>> trajectories;
+  if (optimal_.empty()) {
+    return trajectories;
+  }
+  std::vector<std::size_t> rank(costs_.size());
+  std::iota(rank.begin(), rank.end(), 0);
+  count = std::min(count, rank.size());
+  std::partial_sort(rank.begin(), rank.begin() + count, rank.end(),
+    [this](std::size_t a, std::size_t b) {return costs_[a] < costs_[b];});
+  const std::size_t steps = settings_.prediction_steps;
+  for (std::size_t i = 0; i < count && std::isfinite(costs_[rank[i]]); ++i) {
+    const auto row = states_.begin() + rank[i] * steps;
+    trajectories.emplace_back(row, row + steps);
+  }
+  return trajectories;
+}
+
+double MppiCore::calculation_time_ms() const
+{
+  return calculation_time_ms_;
 }
 }  // namespace mppi_unicycle

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
-#include <random>
 #include <vector>
 
 namespace mppi_unicycle
@@ -24,34 +24,40 @@ struct VOmega
 
 struct Settings
 {
-  int samples{1000};
-  int prediction_steps{30};
-  double prediction_step{0.05};
-  std::array<double, 2> sigma{0.5, 0.5};
-  double lambda{200.0};
-  double max_linear_speed{2.0};
-  double max_angular_speed{1.57};
-  double reference_speed{1.2};
+  int samples{512};
+  int prediction_steps{25};
+  double prediction_step{0.10};
+  double exploration{0.1};  // Share of the samples drawn around zero instead of the last solution.
+  double lambda{1.0};
+  double alpha{0.975};  // Scales the input cost by lambda * (1 - alpha).
+  std::array<double, 2> sigma{0.03, 0.25};
+  bool reduce_computation{false};  // Draw the noise once and reuse it in every solve.
+  double max_linear_speed{0.20};
+  double max_angular_speed{1.0};
+  double reference_speed{0.15};
   double track_width{0.28};
   double wheel_speed_limit{0.0};  // Maximum wheel tangential speed in m/s. Zero leaves it disabled.
-  double xy_goal_tolerance{0.15};
+  double xy_goal_tolerance{0.10};
   double yaw_goal_tolerance{0.15};
-  double velocity_weight{12.0};
-  double heading_weight{30.0};
-  double distance_weight{35.0};
+  double velocity_weight{110.0};
+  double heading_weight{2.0};
+  double distance_weight{16.0};
   double collision_weight{65.0};
   double terminal_weight{60.0};
-  std::array<double, 2> control_change_weight{1.0, 1.0};
+  std::array<double, 2> control_change_weight{0.5, 0.5};
+  bool use_sg_filter{true};  // Smooth the command with a Savitzky-Golay filter.
+  int sg_filter_half_window_size{4};
+  int sg_filter_poly_order{6};
   std::uint32_t random_seed{0};
 };
 
 struct MapCost
 {
   double collision{};
-  std::optional<double> distance;
-  std::optional<double> yaw;
+  std::optional<double> distance;  // Distance to the reference path. Taken from the route if unset.
 };
 
+// The solver evaluates the rollouts in parallel and calls this from several threads at once.
 using Costmap = std::function<MapCost(const Pose &)>;
 
 struct Solution
@@ -64,6 +70,10 @@ double wrap(double angle);
 double distance(const Pose & a, const Pose & b);
 Pose advance(const Pose & pose, const VOmega & input, double dt);
 
+// Weights that give the value of a least-squares polynomial at the center of 2 * half_window + 1
+// equally spaced samples.
+std::vector<double> savitzky_golay_coefficients(int half_window, int order);
+
 class MppiCore
 {
 public:
@@ -72,35 +82,63 @@ public:
   bool set_wheel_speed_limits(double minimum, double maximum);
   void set_route(std::vector<Pose> route);
   std::optional<Solution> solve(
-    const Pose & pose, const VOmega & previous, const Costmap & costmap);
+    const Pose & pose, const VOmega & measured, const Costmap & costmap);
+
+  // Predictions of the latest solve(). They are empty when it returned without optimizing.
+  // The optimal trajectory starts at the solved pose and continues with one pose per step.
+  const std::vector<Pose> & optimal_trajectory() const;
+  // Collision-free sampled trajectories in order of increasing cost.
+  std::vector<std::vector<Pose>> elite_trajectories(std::size_t count) const;
+  double calculation_time_ms() const;
 
 private:
-  struct Reference
+  struct Segment
   {
-    Pose pose;
-    double speed;
+    double x, y, dx, dy, length;
+  };
+
+  // The route as the cost function sees it during one solve.
+  struct Tracking
+  {
+    bool rotate_only;
+    bool goal_in_reach;
+    Pose target;  // Route position one horizon ahead. It takes the role of the goal state.
+    double lookahead;  // Distance along the route to the point that gives the reference direction.
+    std::vector<Segment> window;  // Route segments within reach of the rollouts, in path order.
   };
 
   Pose pose_at(double arc) const;
   void update_progress(const Pose & pose);
   VOmega limit(VOmega input, bool rotate_only) const;
-  std::vector<Reference> references(const Pose & pose, bool rotate_only) const;
-  std::vector<VOmega> seed(const Pose & pose, const std::vector<Reference> & refs,
-    bool rotate_only) const;
+  Tracking track(bool rotate_only) const;
+  void sample_noise();
+  double stage_cost(
+    const Pose & state, const VOmega & input, const VOmega & previous, const Tracking & tracking,
+    const Costmap & costmap) const;
   double rollout(
-    Pose pose, VOmega previous, const VOmega * controls, const std::vector<Reference> & refs,
-    const Costmap & costmap, bool rotate_only) const;
+    Pose state, const VOmega * controls, Pose * states, const Tracking & tracking,
+    const Costmap & costmap) const;
+  VOmega smooth(const std::vector<VOmega> & controls);
+  void reset();
 
   Settings settings_;
-  std::mt19937 random_;
+  std::uint64_t noise_draws_{};
   std::vector<Pose> route_;
   std::vector<double> arc_;
   double progress_{};
   double wheel_min_speed_{};
   double alignment_direction_{};
-  bool warm_{};
-  std::vector<VOmega> nominal_;
+
+  // The sample buffers hold one row of prediction_steps entries per sample.
+  std::vector<VOmega> noise_;
   std::vector<VOmega> controls_;
+  std::vector<Pose> states_;
   std::vector<double> costs_;
+  std::vector<VOmega> nominal_;  // Optimal input sequence of the previous solve.
+  VOmega last_command_;
+  std::vector<Pose> optimal_;
+  std::vector<double> filter_coefficients_;
+  std::vector<VOmega> filter_history_;  // Past filtered commands, oldest first.
+  double calculation_time_ms_{};
 };
 }  // namespace mppi_unicycle
