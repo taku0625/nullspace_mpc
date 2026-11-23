@@ -65,6 +65,28 @@ TEST(UnicycleMppi, AlignsAndDrivesWithTheNegotiatedWheelSpeedFloor)
   EXPECT_LE(drive->command.v + turn_speed, 0.28 + 1e-9);
 }
 
+TEST(UnicycleMppi, TracksWithoutAFloorWhenTheEscReportsNone)
+{
+  Settings settings;
+  settings.samples = 128;
+  settings.max_linear_speed = 0.20;
+  settings.max_angular_speed = 1.0;
+  settings.reference_speed = 0.15;
+  const double old_floor = 0.0754;
+  MppiCore controller(settings);
+  ASSERT_TRUE(controller.set_wheel_speed_limits(0.0, 0.28));
+
+  // A heading error that needs an in-place alignment with a floor is corrected while driving.
+  controller.set_route({{}, {1.5, 0.0, 0.0}});
+  const auto curve = controller.solve({0.0, 0.0, -0.55}, {}, {});
+  ASSERT_TRUE(curve);
+  EXPECT_GT(curve->command.v, 0.0);
+  EXPECT_GT(curve->command.omega, 0.0);
+  const double turn_speed = 0.5 * settings.track_width * std::abs(curve->command.omega);
+  EXPECT_LT(curve->command.v - turn_speed, old_floor);
+  EXPECT_LE(curve->command.v + turn_speed, 0.28 + 1e-9);
+}
+
 TEST(UnicycleMppi, AlignsAtGoalAndReturnsZeroAfterReachingIt)
 {
   Settings settings;
