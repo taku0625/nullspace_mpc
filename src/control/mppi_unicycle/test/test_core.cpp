@@ -170,6 +170,71 @@ TEST(UnicycleMppi, AlignsAndDrivesWithTheNegotiatedWheelSpeedFloor)
   EXPECT_TRUE(supported);
 }
 
+TEST(UnicycleMppi, StartsAndReversesWheelsOnlyFromRestWithAConfiguredFloor)
+{
+  Settings settings;
+  settings.wheel_speed_limit = 0.28;
+  settings.wheel_speed_floor = 0.0754;
+  const double half_track = 0.5 * settings.track_width;
+  std::vector<Pose> route;
+  for (int i = 0; i <= 15; ++i) {
+    route.push_back({0.04 * i, 0.0, 0.0});
+  }
+  for (int i = 1; i <= 15; ++i) {
+    route.push_back({0.6, 0.04 * i, pi / 2.0});
+  }
+
+  // The heading errors are corrected while driving, by a turn in place, and by a turn back.
+  for (const double heading : {0.0, -0.6, -1.5, 3.0}) {
+    MppiCore controller(settings);
+    controller.set_route(route);
+    Pose pose{0.0, 0.0, heading};
+    enum class Motion {stop, turn, drive};
+    Motion previous = Motion::stop;
+    bool supported = true, together = true;
+    int turns = 0;
+    VOmega first;
+    bool started = false;
+    EXPECT_TRUE(drive(controller, pose, 40.0, {}, [&](const Pose &, const VOmega & input) {
+        const double turn_speed = half_track * std::abs(input.omega);
+        const Motion motion = input.v > 0.0 ? Motion::drive :
+        input.omega != 0.0 ? Motion::turn : Motion::stop;
+        // A turning wheel never runs slower than the floor.
+        supported = supported && (motion == Motion::stop ||
+        (motion == Motion::turn ? turn_speed >= settings.wheel_speed_floor - 1e-9 :
+        input.v - turn_speed >= settings.wheel_speed_floor - 1e-9));
+        // Driving and turning in place are separated by a stop of both wheels.
+        together = together && (motion == previous || motion == Motion::stop ||
+        previous == Motion::stop);
+        turns += motion == Motion::turn && previous != Motion::turn;
+        previous = motion;
+        if (!started) {
+          first = input;
+          started = true;
+        }
+      }));
+    EXPECT_TRUE(supported);
+    EXPECT_TRUE(together);
+    if (std::abs(heading) < pi / 4.0) {
+      // Both wheels start forward at the floor or faster with the first command.
+      EXPECT_GE(first.v - half_track * std::abs(first.omega), settings.wheel_speed_floor - 1e-9);
+      EXPECT_EQ(turns, 1);  // Only the corner needs a turn in place.
+    } else {
+      EXPECT_EQ(first.v, 0.0);
+      EXPECT_GT(first.omega * -heading, 0.0);
+      EXPECT_EQ(turns, 2);
+    }
+    EXPECT_NEAR(pose.x, 0.6, 0.06);
+  }
+
+  Settings invalid = settings;
+  invalid.wheel_speed_floor = 0.25;  // Faster than max_linear_speed.
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+  invalid = settings;
+  invalid.max_angular_speed = 0.4;  // Too slow to turn in place with both wheels at the floor.
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+}
+
 TEST(UnicycleMppi, TracksWithoutAFloorWhenTheEscReportsNone)
 {
   const Settings settings;

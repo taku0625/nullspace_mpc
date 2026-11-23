@@ -140,7 +140,7 @@ MppiCore::MppiCore(Settings settings)
   const std::array nonnegative{
     settings.velocity_weight, settings.heading_weight, settings.distance_weight,
     settings.collision_weight, settings.terminal_weight, settings.control_change_weight[0],
-    settings.control_change_weight[1], settings.wheel_speed_limit,
+    settings.control_change_weight[1], settings.wheel_speed_limit, settings.wheel_speed_floor,
   };
   if (settings.samples < 3 || settings.prediction_steps < 2 ||
     !std::all_of(positive.begin(), positive.end(),
@@ -152,6 +152,17 @@ MppiCore::MppiCore(Settings settings)
   {
     throw std::invalid_argument("Invalid MPPI horizon, noise, limits or cost weights");
   }
+  // With a floor the robot drives with both wheels at it or faster and turns in place with
+  // both wheels at it, so the speed limits have to leave room for both.
+  const double floor = settings.wheel_speed_floor;
+  if (floor > settings.max_linear_speed ||
+    (settings.wheel_speed_limit > 0.0 && floor > settings.wheel_speed_limit) ||
+    floor > 0.5 * settings.track_width * settings.max_angular_speed)
+  {
+    throw std::invalid_argument(
+            "The wheel speed floor exceeds the linear, angular or wheel speed limit");
+  }
+  wheel_min_speed_ = floor;
   if (settings.use_sg_filter) {
     if (settings.sg_filter_half_window_size >= settings.prediction_steps) {
       throw std::invalid_argument(
@@ -180,7 +191,7 @@ bool MppiCore::set_wheel_speed_limits(double minimum, double maximum)
   if (minimum != wheel_min_speed_ || maximum != settings_.wheel_speed_limit) {
     wheel_min_speed_ = minimum;
     settings_.wheel_speed_limit = maximum;
-    alignment_direction_ = 0.0;
+    maneuver_ = Maneuver::drive;
     reset();
   }
   return true;
@@ -203,7 +214,7 @@ void MppiCore::set_route(std::vector<Pose> route)
     route_.push_back(point);
   }
   progress_ = 0.0;
-  alignment_direction_ = 0.0;
+  maneuver_ = Maneuver::drive;
   reset();
 }
 
@@ -253,11 +264,11 @@ VOmega MppiCore::limit(VOmega input, bool rotate_only) const
   input.omega = std::clamp(input.omega, -settings_.max_angular_speed, settings_.max_angular_speed);
   const double half_track = 0.5 * settings_.track_width;
   if (wheel_min_speed_ > 0.0) {
-    // Forward rollouts keep both wheels above the ESC floor. Alignments are in-place turns.
-    input.v = std::clamp(input.v, wheel_min_speed_,
-      std::min(settings_.max_linear_speed, settings_.wheel_speed_limit));
-    const double max_turn = std::min(input.v - wheel_min_speed_,
-        settings_.wheel_speed_limit - input.v) / half_track;
+    // Forward rollouts keep both wheels at the floor or faster. Sharper turns are made in place.
+    const double fastest = settings_.wheel_speed_limit > 0.0 ?
+      settings_.wheel_speed_limit : no_path;
+    input.v = std::clamp(input.v, wheel_min_speed_, std::min(settings_.max_linear_speed, fastest));
+    const double max_turn = std::min(input.v - wheel_min_speed_, fastest - input.v) / half_track;
     input.omega = std::clamp(input.omega, -max_turn, max_turn);
     return input;
   }
@@ -409,8 +420,8 @@ VOmega MppiCore::smooth(const std::vector<VOmega> & controls)
 
 void MppiCore::reset()
 {
-  // With an ESC floor the plan starts at the slowest forward speed. Around zero input every
-  // sample would be raised to that same speed, and their costs would not tell them apart.
+  // With a wheel speed floor the plan starts at the slowest forward speed. Around zero input
+  // every sample would be raised to that same speed, and their costs would not tell them apart.
   std::fill(nominal_.begin(), nominal_.end(), limit({}, false));
   std::fill(filter_history_.begin(), filter_history_.end(), VOmega{});
   last_command_ = {};
@@ -439,27 +450,44 @@ std::optional<Solution> MppiCore::solve(
     const double target = rotate_only ? goal.yaw :
       std::atan2(lookahead.y - pose.y, lookahead.x - pose.x);
     const double error = wrap(target - pose.yaw);
-    // Keep the same turn until aligned so the ESCs can complete acquisition.
-    const double align_threshold = alignment_direction_ == 0.0 ? pi / 4.0 : pi / 8.0;
-    if (rotate_only || std::abs(error) > align_threshold) {
-      reset();
-      if (alignment_direction_ == 0.0 || std::abs(error) < pi - 0.10) {
-        alignment_direction_ = std::copysign(1.0, error);
+    const double half_track = 0.5 * settings_.track_width;
+    if (maneuver_ == Maneuver::drive && (rotate_only || std::abs(error) > pi / 4.0)) {
+      maneuver_ = Maneuver::brake;
+    } else if (maneuver_ == Maneuver::turn) {
+      // A sign change near half a turn is the angle wrapping, not the target being passed.
+      const bool passed = error * turn_direction_ < 0.0 && std::abs(error) < pi / 2.0;
+      if (passed || (!rotate_only && std::abs(error) <= pi / 8.0)) {
+        maneuver_ = Maneuver::brake;
       }
-      if (std::abs(measured.v) > 0.5 * wheel_min_speed_) {
+    }
+    if (maneuver_ == Maneuver::brake) {
+      // Sensorless ESCs start a wheel at the floor speed and reverse it only from rest. Both
+      // wheels stop between driving and turning so that they start the next maneuver together.
+      reset();
+      const double creep = 0.5 * wheel_min_speed_;
+      if (std::abs(measured.v) > creep || half_track * std::abs(measured.omega) > creep) {
         return Solution{};
       }
-      const double half_track = 0.5 * settings_.track_width;
+      if (rotate_only || std::abs(error) > pi / 8.0) {
+        maneuver_ = Maneuver::turn;
+        turn_direction_ = std::copysign(1.0, error);
+      } else {
+        maneuver_ = Maneuver::drive;
+      }
+    }
+    if (maneuver_ == Maneuver::turn) {
+      reset();
       const double min_turn = wheel_min_speed_ / half_track;
-      const double max_turn = std::min(settings_.max_angular_speed,
-          settings_.wheel_speed_limit / half_track);
+      const double max_turn = settings_.wheel_speed_limit > 0.0 ?
+        std::min(settings_.max_angular_speed, settings_.wheel_speed_limit / half_track) :
+        settings_.max_angular_speed;
       if (max_turn < min_turn || (costmap && !std::isfinite(costmap(pose).collision))) {
         return std::nullopt;
       }
-      return Solution{{0.0, alignment_direction_ *
+      // The direction is kept for the whole turn so the ESCs can complete acquisition.
+      return Solution{{0.0, turn_direction_ *
         std::clamp(3.0 * std::abs(error), min_turn, max_turn)}, false};
     }
-    alignment_direction_ = 0.0;
   }
 
   const auto tracking = track(rotate_only);
@@ -490,12 +518,6 @@ std::optional<Solution> MppiCore::solve(
   if (!std::isfinite(*best)) {
     reset();
     return std::nullopt;
-  }
-  bool stop = false;
-  if (wheel_min_speed_ > 0.0) {
-    // Every sample keeps both wheels above the ESC floor, so stopping is compared separately.
-    const std::vector<VOmega> stopped(steps);
-    stop = rollout(pose, stopped.data(), nullptr, tracking, costmap) < *best;
   }
 
   // Add the noise of each sample to the previous solution, weighted by its cost.
@@ -528,8 +550,7 @@ std::optional<Solution> MppiCore::solve(
     std::copy_n(states_.begin() + row, steps, optimal_.begin() + 1);
   }
 
-  // While stopping costs less than every sample, the robot waits and the plan keeps improving.
-  last_command_ = stop ? VOmega{} : optimum.front();
+  last_command_ = optimum.front();
   nominal_ = std::move(optimum);
   calculation_time_ms_ = std::chrono::duration<double, std::milli>(
     std::chrono::steady_clock::now() - started).count();

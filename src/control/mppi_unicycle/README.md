@@ -55,7 +55,15 @@ state. These parts differ:
 - Within `xy_goal_tolerance` of the goal the heading error refers to the goal
   yaw, and the robot turns in place until it is within `yaw_goal_tolerance`.
 - The inputs keep `v` between zero and `max_linear_speed`, `omega` within
-  `max_angular_speed` and both wheels within the wheel speed limits.
+  `max_angular_speed` and both wheels within `wheel_speed_limit`.
+- With `wheel_speed_floor` above zero, a wheel either stands still or turns at
+  the floor speed or faster. A sensorless ESC starts a wheel at its start
+  speed and reverses it only from rest, so slower or alternating wheel
+  commands are never sent. The robot drives forward with both wheels at the
+  floor or faster, which limits the turn rate to
+  `(v - wheel_speed_floor) / (track_width / 2)`. When the route ahead is more
+  than 45 degrees off the heading, and at the goal yaw, it stops both wheels,
+  turns in place and stops again before it drives on.
 - A predicted pose on a lethal or unknown collision cell rejects its sample.
   The action aborts when every sample is rejected.
 

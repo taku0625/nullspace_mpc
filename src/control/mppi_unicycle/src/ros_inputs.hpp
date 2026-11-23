@@ -32,6 +32,7 @@ inline Settings declare_settings(rclcpp::Node & node)
   settings.reference_speed = node.declare_parameter("reference_speed", settings.reference_speed);
   settings.track_width = node.declare_parameter("track_width", settings.track_width);
   settings.wheel_speed_limit = node.declare_parameter("wheel_speed_limit", settings.wheel_speed_limit);
+  settings.wheel_speed_floor = node.declare_parameter("wheel_speed_floor", settings.wheel_speed_floor);
   settings.xy_goal_tolerance = node.declare_parameter("xy_goal_tolerance", settings.xy_goal_tolerance);
   settings.yaw_goal_tolerance = node.declare_parameter("yaw_goal_tolerance", settings.yaw_goal_tolerance);
   settings.velocity_weight = node.declare_parameter("velocity_weight", settings.velocity_weight);

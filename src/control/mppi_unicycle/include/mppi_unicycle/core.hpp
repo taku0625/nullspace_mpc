@@ -37,6 +37,9 @@ struct Settings
   double reference_speed{0.15};
   double track_width{0.28};
   double wheel_speed_limit{0.0};  // Maximum wheel tangential speed in m/s. Zero leaves it disabled.
+  // Slowest tangential speed of a turning wheel in m/s, such as the start speed of a sensorless
+  // ESC. Above zero, every command either stops both wheels or runs both at it or faster.
+  double wheel_speed_floor{0.0};
   double xy_goal_tolerance{0.10};
   double yaw_goal_tolerance{0.15};
   double velocity_weight{110.0};
@@ -126,8 +129,12 @@ private:
   std::vector<Pose> route_;
   std::vector<double> arc_;
   double progress_{};
+  // With a wheel speed floor the robot drives forward or turns in place, and brakes in between.
+  enum class Maneuver {drive, brake, turn};
+
   double wheel_min_speed_{};
-  double alignment_direction_{};
+  Maneuver maneuver_{Maneuver::drive};
+  double turn_direction_{};
 
   // The sample buffers hold one row of prediction_steps entries per sample.
   std::vector<VOmega> noise_;

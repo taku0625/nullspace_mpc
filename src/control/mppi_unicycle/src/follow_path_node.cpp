@@ -224,7 +224,9 @@ private:
     }
     const auto & left = drive_state_->left;
     const auto & right = drive_state_->right;
-    const double minimum = wheel_radius_ * std::max(left.min_output_rad_s, right.min_output_rad_s);
+    const double minimum = std::max(
+      settings_.wheel_speed_floor,
+      wheel_radius_ * std::max(left.min_output_rad_s, right.min_output_rad_s));
     double maximum = wheel_radius_ * std::min(left.max_output_rad_s, right.max_output_rad_s);
     if (settings_.wheel_speed_limit > 0.0) {
       maximum = std::min(maximum, settings_.wheel_speed_limit);
