@@ -63,6 +63,9 @@ public:
     if (base_.empty() || base_.front() == '/') {
       throw std::invalid_argument("Set a valid base_frame");
     }
+    RCLCPP_INFO(
+      get_logger(), "Wheel speed floor %.3f m/s, limit %.3f m/s", settings_.wheel_speed_floor,
+      settings_.wheel_speed_limit);
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
     optimal_trajectory_ = create_publisher<MarkerArray>("mpc/optimal_traj", 1);
     sampled_trajectories_ = create_publisher<MarkerArray>("mpc/sampled_traj", 1);
