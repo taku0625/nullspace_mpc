@@ -127,6 +127,7 @@ TEST(UnicycleMppi, LimitsForwardSpeedAndBothWheels)
   Settings settings;
   settings.track_width = 0.30;
   settings.wheel_speed_limit = 0.12;
+  settings.wheel_speed_floor = 0.0;
   MppiCore controller(settings);
   controller.set_route({{}, {1.0, 0.3, 0.0}});
   Pose pose;
@@ -170,11 +171,11 @@ TEST(UnicycleMppi, AlignsAndDrivesWithTheNegotiatedWheelSpeedFloor)
   EXPECT_TRUE(supported);
 }
 
-TEST(UnicycleMppi, StartsAndReversesWheelsOnlyFromRestWithAConfiguredFloor)
+TEST(UnicycleMppi, StartsAndReversesWheelsOnlyFromRestByDefault)
 {
   Settings settings;
   settings.wheel_speed_limit = 0.28;
-  settings.wheel_speed_floor = 0.0754;
+  ASSERT_GT(settings.wheel_speed_floor, 0.0754);  // Above the 8 RPM start speed of the ESCs.
   const double half_track = 0.5 * settings.track_width;
   std::vector<Pose> route;
   for (int i = 0; i <= 15; ++i) {
@@ -235,14 +236,15 @@ TEST(UnicycleMppi, StartsAndReversesWheelsOnlyFromRestWithAConfiguredFloor)
   EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
 }
 
-TEST(UnicycleMppi, TracksWithoutAFloorWhenTheEscReportsNone)
+TEST(UnicycleMppi, CorrectsALargeHeadingErrorWhileDrivingWithoutAFloor)
 {
-  const Settings settings;
+  Settings settings;
+  settings.wheel_speed_limit = 0.28;
+  settings.wheel_speed_floor = 0.0;
   const double old_floor = 0.0754;
   MppiCore controller(settings);
-  ASSERT_TRUE(controller.set_wheel_speed_limits(0.0, 0.28));
 
-  // A heading error that needs an in-place alignment with a floor is corrected while driving.
+  // The inner wheel then runs slower than the floor would allow.
   controller.set_route({{}, {1.5, 0.0, 0.0}});
   Pose pose{0.0, 0.0, -0.55};
   bool curved = false;
@@ -327,7 +329,8 @@ TEST(UnicycleMppi, KeepsPathOrderAtARevisitedStart)
 
 TEST(UnicycleMppi, PredictsTrajectoriesForVisualization)
 {
-  const Settings settings;
+  Settings settings;
+  settings.wheel_speed_floor = 0.0;  // The robot may stand still in front of the wall.
   MppiCore controller(settings);
   EXPECT_TRUE(controller.optimal_trajectory().empty());
   EXPECT_TRUE(controller.elite_trajectories(10).empty());

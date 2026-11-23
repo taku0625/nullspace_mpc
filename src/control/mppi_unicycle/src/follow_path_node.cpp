@@ -66,6 +66,11 @@ public:
     RCLCPP_INFO(
       get_logger(), "Wheel speed floor %.3f m/s, limit %.3f m/s", settings_.wheel_speed_floor,
       settings_.wheel_speed_limit);
+    if (settings_.wheel_speed_floor == 0.0) {
+      RCLCPP_WARN(
+        get_logger(), "wheel_speed_floor is 0: wheel commands can fall below the start speed of "
+        "sensorless ESCs, which stop with an overspeed fault");
+    }
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
     optimal_trajectory_ = create_publisher<MarkerArray>("mpc/optimal_traj", 1);
     sampled_trajectories_ = create_publisher<MarkerArray>("mpc/sampled_traj", 1);

@@ -37,9 +37,11 @@ struct Settings
   double reference_speed{0.15};
   double track_width{0.28};
   double wheel_speed_limit{0.0};  // Maximum wheel tangential speed in m/s. Zero leaves it disabled.
-  // Slowest tangential speed of a turning wheel in m/s, such as the start speed of a sensorless
-  // ESC. Above zero, every command either stops both wheels or runs both at it or faster.
-  double wheel_speed_floor{0.0};
+  // Slowest tangential speed of a turning wheel in m/s. Above zero, every command either stops
+  // both wheels or runs both at it or faster. The default is just above the 8 RPM start speed of
+  // the sensorless Misachiya ESCs at the 0.09 m wheel radius: they trip their overspeed
+  // protection on slower commands. Zero removes the floor.
+  double wheel_speed_floor{0.0762};
   double xy_goal_tolerance{0.10};
   double yaw_goal_tolerance{0.15};
   double velocity_weight{110.0};
