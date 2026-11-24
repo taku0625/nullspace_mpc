@@ -102,7 +102,9 @@ them. Here the route is a recording, and nothing replans it. Three parts replace
   detours off.
 - **Blocked route.** When every sample is rejected, the robot stops and waits for the
   obstacle to leave. The action aborts with `Obstacles kept the recorded route blocked`
-  when the robot has not moved for `stall_timeout` (8 s).
+  when the robot has not moved for `stall_timeout` (8 s). The warning while it waits and the
+  abort message say whether the robot itself stands within the margin of an obstacle or
+  every sampled trajectory runs into one ahead.
 
 While a detour is followed, the distance cost refers to the detour instead of the
 `distance_error` layer, and the stops and turns in place refer to it as well. The route

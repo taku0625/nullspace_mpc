@@ -532,6 +532,12 @@ private:
       finish("MPPI did not find a feasible trajectory");
       return;
     }
+    // An obstacle within the margin of the robot itself is often a bystander, or a part of
+    // the robot that the costmap takes for an obstacle.
+    const std::string obstruction = !blocked ? "" :
+      std::isfinite(evaluate_cost(pose).collision) ?
+      "every sampled trajectory runs into an obstacle" :
+      "the robot stands within the margin of an obstacle";
     publish_predictions(
       command_time + rclcpp::Duration::from_seconds(settings_.actuator_dead_time));
     if (!fresh_localization() || !fresh_costmap() || !fresh_drive_state()) {
@@ -553,14 +559,15 @@ private:
       last_progress_ = time;
     } else if (std::chrono::duration<double>(time - last_progress_).count() > stall_timeout_) {
       const auto reason = drive_state_ ? " (chassis: " + drive_state_->reason + ")" : "";
-      finish(blocked ? "Obstacles kept the recorded route blocked" :
+      finish(blocked ? "Obstacles kept the recorded route blocked: " + obstruction :
         "The chassis stopped making progress along the recorded route" + reason);
       return;
     }
 
     if (blocked) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000, "Obstacles block the route. Waiting for them to leave");
+        get_logger(), *get_clock(), 2000, "Obstacles block the route: %s. Waiting for them to "
+        "leave", obstruction.c_str());
     }
     publish(blocked ? VOmega{} : result->command);
     auto feedback = std::make_shared<FollowPath::Feedback>();
