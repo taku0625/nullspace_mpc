@@ -50,6 +50,7 @@ inline Settings declare_settings(rclcpp::Node & node)
   settings.actuator_time_constant = node.declare_parameter(
     "actuator_time_constant", settings.actuator_time_constant);
   settings.wheel_accel_limit = node.declare_parameter("wheel_accel_limit", settings.wheel_accel_limit);
+  settings.wheel_decel_limit = node.declare_parameter("wheel_decel_limit", settings.wheel_decel_limit);
   settings.command_timeout = node.declare_parameter("command_timeout", settings.command_timeout);
 
   auto pair = [&node](const std::string & name, std::array<double, 2> defaults) {

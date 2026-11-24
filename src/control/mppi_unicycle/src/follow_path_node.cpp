@@ -75,8 +75,9 @@ public:
     }
     RCLCPP_INFO(
       get_logger(), "Actuator response: dead time %.3f s, time constant %.3f s, wheel "
-      "acceleration limit %.3f m/s^2, pose age %s", settings_.actuator_dead_time,
-      settings_.actuator_time_constant, settings_.wheel_accel_limit,
+      "acceleration limit %.3f m/s^2, deceleration limit %.3f m/s^2, pose age %s",
+      settings_.actuator_dead_time, settings_.actuator_time_constant, settings_.wheel_accel_limit,
+      settings_.wheel_decel_limit > 0.0 ? settings_.wheel_decel_limit : settings_.wheel_accel_limit,
       compensate_pose_age_ ? "compensated" : "ignored");
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
     predicted_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("mpc/predicted_pose", 5);

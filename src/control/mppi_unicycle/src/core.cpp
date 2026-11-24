@@ -83,36 +83,48 @@ Pose advance_midway(const Pose & pose, const VOmega & mean, double dt)
 }
 
 // Moves one wheel toward a constant target for dt and returns its mean speed over that time.
-// The reference ramps to the target at the acceleration limit and rests there. The speed
-// follows the reference with the time constant. Both phases have a closed solution, so the
-// result does not depend on how a time span is divided into steps.
+// The reference ramps to the target and rests there: at the acceleration limit while the wheel
+// speeds up and at the deceleration limit while it slows down. A wheel that changes direction
+// slows down to rest first. The speed follows the reference with the time constant. Every phase
+// has a closed solution, so the result does not depend on how a time span is divided into steps.
 double drive_wheel(
   double & reference, double & speed, double target, double dt, double time_constant,
-  double accel_limit)
+  double accel_limit, double decel_limit)
 {
   if (!(dt > 0.0)) {
     return speed;
   }
-  const double gap = target - reference;
-  const double ramp = accel_limit > 0.0 ? std::min(dt, std::abs(gap) / accel_limit) : 0.0;
   double travelled = 0.0;
-  if (ramp > 0.0) {
-    const double slope = std::copysign(accel_limit, gap);
-    const double reached = reference + slope * ramp;
+  double rest = dt;
+  const std::array<double, 2> goals{reference * target < 0.0 ? 0.0 : target, target};
+  for (const double goal : goals) {
+    const double gap = goal - reference;
+    const double limit = std::abs(goal) < std::abs(reference) ? decel_limit : accel_limit;
+    if (gap == 0.0 || !(rest > 0.0)) {
+      continue;
+    }
+    if (!(limit > 0.0)) {
+      reference = goal;  // Without a limit the reference follows at once.
+      continue;
+    }
+    const double needed = std::abs(gap) / limit;
+    const double ramp = std::min(rest, needed);
+    const double slope = std::copysign(limit, gap);
+    const double reached = needed <= rest ? goal : reference + slope * ramp;
     if (time_constant > 0.0) {
       // Behind a ramping reference the speed settles at the reference minus slope * tau.
       const double decay = std::exp(-ramp / time_constant);
       const double offset = speed - reference + slope * time_constant;
       travelled += (reference - slope * time_constant) * ramp + 0.5 * slope * ramp * ramp +
         offset * time_constant * (1.0 - decay);
-      speed = reached - slope * time_constant + offset * decay;
+      speed = reference + slope * ramp - slope * time_constant + offset * decay;
     } else {
       travelled += (reference + 0.5 * slope * ramp) * ramp;
       speed = reached;
     }
     reference = reached;
+    rest -= ramp;
   }
-  const double rest = dt - ramp;
   if (rest > 0.0) {
     reference = target;
     if (time_constant > 0.0) {
@@ -208,6 +220,7 @@ MppiCore::MppiCore(Settings settings)
     settings.collision_weight, settings.terminal_weight, settings.control_change_weight[0],
     settings.control_change_weight[1], settings.wheel_speed_limit, settings.wheel_speed_floor,
     settings.actuator_dead_time, settings.actuator_time_constant, settings.wheel_accel_limit,
+    settings.wheel_decel_limit,
   };
   if (settings.samples < 3 || settings.prediction_steps < 2 ||
     !std::all_of(positive.begin(), positive.end(),
@@ -394,7 +407,8 @@ void MppiCore::sample_noise()
 
 bool MppiCore::wheels_modelled() const
 {
-  return settings_.actuator_time_constant > 0.0 || settings_.wheel_accel_limit > 0.0;
+  return settings_.actuator_time_constant > 0.0 || settings_.wheel_accel_limit > 0.0 ||
+         settings_.wheel_decel_limit > 0.0;
 }
 
 VOmega MppiCore::drive(Wheels & wheels, const VOmega & command, double dt) const
@@ -406,7 +420,8 @@ VOmega MppiCore::drive(Wheels & wheels, const VOmega & command, double dt) const
   for (std::size_t i = 0; i < target.size(); ++i) {
     mean[i] = drive_wheel(
       wheels.reference[i], wheels.speed[i], target[i], dt, settings_.actuator_time_constant,
-      settings_.wheel_accel_limit);
+      settings_.wheel_accel_limit, settings_.wheel_decel_limit > 0.0 ?
+      settings_.wheel_decel_limit : settings_.wheel_accel_limit);
   }
   return {0.5 * (mean[0] + mean[1]), (mean[1] - mean[0]) / settings_.track_width};
 }
@@ -448,10 +463,17 @@ std::optional<MppiCore::Start> MppiCore::predict(const Pose & pose, const Timing
   double settling = 0.0;
   if (modelled) {
     settling = 5.0 * settings_.actuator_time_constant;
-    if (settings_.wheel_accel_limit > 0.0) {
+    // The slower of the two limits decides how long a wheel takes to cross its speed range.
+    double slowest = settings_.wheel_accel_limit;
+    if (settings_.wheel_decel_limit > 0.0 &&
+      (slowest == 0.0 || settings_.wheel_decel_limit < slowest))
+    {
+      slowest = settings_.wheel_decel_limit;
+    }
+    if (slowest > 0.0) {
       const double fastest = settings_.wheel_speed_limit > 0.0 ? settings_.wheel_speed_limit :
         settings_.max_linear_speed + 0.5 * settings_.track_width * settings_.max_angular_speed;
-      settling += 2.0 * fastest / settings_.wheel_accel_limit;
+      settling += 2.0 * fastest / slowest;
     }
     settling = std::min(settling, max_settling_time);
   }

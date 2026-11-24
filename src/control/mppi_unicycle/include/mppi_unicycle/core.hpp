@@ -58,10 +58,13 @@ struct Settings
   // Response of the drive between a sent command and the wheel speeds. A command reaches the
   // wheels after the dead time. The reference of each wheel then follows it within the
   // acceleration limit, and the wheel speed follows the reference with a first-order lag.
-  // Zero leaves a part out. With all three at zero the wheels follow a command at once.
+  // Zero leaves a part out. With all of them at zero the wheels follow a command at once.
   double actuator_dead_time{0.0};  // s
   double actuator_time_constant{0.0};  // s
-  double wheel_accel_limit{0.0};  // m/s^2 of the wheel tangential speed
+  double wheel_accel_limit{0.0};  // m/s^2 of the wheel tangential speed while a wheel speeds up
+  // m/s^2 while a wheel slows down. Zero takes the limit for speeding up. An ESC that ramps a
+  // wheel up slowly and lets it slow down as fast as commanded needs a larger value here.
+  double wheel_decel_limit{0.0};
   // Time in seconds for which the chassis keeps driving on its last command.
   double command_timeout{0.30};
 };

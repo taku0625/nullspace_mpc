@@ -72,8 +72,9 @@ struct SlowDrive
     VOmega velocity;
   };
 
-  SlowDrive(const Pose & start, double esc_accel)
-  : esc_accel(esc_accel), pose(start), observations{{0.0, start, {}}}
+  // The ESCs take one limit for a wheel that speeds up and one for a wheel that slows down.
+  SlowDrive(const Pose & start, double esc_accel, double esc_decel)
+  : esc_accel(esc_accel), esc_decel(esc_decel), pose(start), observations{{0.0, start, {}}}
   {
   }
 
@@ -104,7 +105,8 @@ struct SlowDrive
         std::abs(target[1] - host[1]) / (host_accel * dt)});
     for (std::size_t i = 0; i < target.size(); ++i) {
       host[i] += (target[i] - host[i]) / slew;
-      reference[i] += std::clamp(host[i] - reference[i], -esc_accel * dt, esc_accel * dt);
+      const double limit = std::abs(host[i]) < std::abs(reference[i]) ? esc_decel : esc_accel;
+      reference[i] += std::clamp(host[i] - reference[i], -limit * dt, limit * dt);
       wheel[i] += (reference[i] - wheel[i]) * (1.0 - std::exp(-dt / lag));
     }
     const auto motion = velocity();
@@ -132,7 +134,7 @@ struct SlowDrive
     return latest;
   }
 
-  double esc_accel;
+  double esc_accel, esc_decel;
   double time{};
   Pose pose;
   std::array<double, 2> host{}, reference{}, wheel{};
@@ -150,7 +152,8 @@ struct Weave
 };
 
 // Follows a straight route for 26 s from 0.1 m beside it and measures the motion after 6 s.
-Weave follow_straight_route(Settings settings, double esc_accel, bool compensate)
+Weave follow_straight_route(
+  Settings settings, double esc_accel, bool compensate, double esc_decel = 0.0)
 {
   settings.wheel_speed_limit = 0.2827;
   MppiCore controller(settings);
@@ -159,7 +162,7 @@ Weave follow_straight_route(Settings settings, double esc_accel, bool compensate
     route.push_back({0.04 * i, 0.0, 0.0});
   }
   controller.set_route(route);
-  SlowDrive drive({0.0, 0.10, 0.0}, esc_accel);
+  SlowDrive drive({0.0, 0.10, 0.0}, esc_accel, esc_decel > 0.0 ? esc_decel : esc_accel);
   Weave weave;
   double heading = 0.0, yaw_rate = 0.0;
   int measured = 0;
@@ -455,6 +458,9 @@ TEST(UnicycleMppi, RejectsInvalidSettingsAndAnEmptyOrBlockedRoute)
   invalid.wheel_accel_limit = std::numeric_limits<double>::quiet_NaN();
   EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
   invalid = Settings{};
+  invalid.wheel_decel_limit = -0.2;
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+  invalid = Settings{};
   invalid.command_timeout = 0.0;
   EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
 
@@ -638,6 +644,37 @@ TEST(UnicycleMppi, StartsTheRolloutsWhereTheSentCommandsTakeTheRobot)
   EXPECT_NEAR(start.x, 0.05 * (1.05 * 1.05 - 0.75 * 0.75), 1e-9);
   EXPECT_NEAR(start.y, 0.0, 1e-12);
 
+  // A wheel slows down within its own limit. The wheels run at `before` until commands of
+  // `after` start at 5 s and reach them at 5.2 s.
+  Settings braking = ramping;
+  braking.wheel_decel_limit = 0.3;
+  const auto start_after_change = [&](double before, double after, double command_time) {
+      MppiCore controller(braking);
+      controller.set_route(route);
+      for (int i = 0; i < 100; ++i) {
+        controller.command_sent({before, 0.0}, control_interval * i);
+      }
+      for (int i = 100; control_interval * i < command_time; ++i) {
+        controller.command_sent({after, 0.0}, control_interval * i);
+      }
+      const Timing timing{command_time - 0.1, command_time};
+      EXPECT_TRUE(controller.solve({}, {before, 0.0}, {}, timing));
+      const auto & predicted = controller.optimal_trajectory();
+      EXPECT_FALSE(predicted.empty());
+      return predicted.empty() ? Pose{} : predicted.front();
+    };
+  // From 0.2 to 0.1 m/s the speed is 0.2 - 0.3 (t - 5.2). The pose is from 5.15 s and the
+  // rollouts start at 5.45 s. Speeding up still takes the limit of 0.1 m/s^2.
+  start = start_after_change(0.2, 0.1, 5.25);
+  EXPECT_NEAR(start.x, 0.2 * 0.05 + 0.2 * 0.25 - 0.5 * 0.3 * 0.25 * 0.25, 1e-9);
+  start = predicted_start(braking, straight, 21, 1.05);
+  EXPECT_NEAR(start.x, 0.05 * (1.05 * 1.05 - 0.75 * 0.75), 1e-9);
+  // A wheel that reverses slows down to rest at 0.3 m/s^2, which it reaches a third of a
+  // second after 5.2 s, and speeds up backward at 0.1 m/s^2 from there.
+  start = start_after_change(0.1, -0.1, 6.05);
+  const double from = 5.95 - (5.2 + 0.1 / 0.3), to = from + 0.3;
+  EXPECT_NEAR(start.x, -0.05 * (to * to - from * from), 1e-9);
+
   // With a time constant of 0.15 s the speed is 0.2 (1 - exp(-(t - 0.2) / 0.15)) instead,
   // here between the pose at 0.75 s and the start at 1.05 s.
   Settings lagging = delayed;
@@ -745,6 +782,29 @@ TEST(UnicycleMppi, FollowsAnEscWithATighterAccelerationLimit)
   ASSERT_TRUE(optimistic.completed);
   EXPECT_LT(3.0 * optimistic.heading_rms, weaving.heading_rms);
   EXPECT_EQ(optimistic.stops, 0);
+}
+
+TEST(UnicycleMppi, FollowsAnEscThatLimitsOnlyTheAcceleration)
+{
+  // The ESCs of the robot speed a wheel up at 10 RPM/s and let it slow down as fast as the
+  // host asks, which is 28 RPM/s.
+  const double esc_accel = 0.094, esc_decel = 10.0;
+  Settings plain;
+  const auto weaving = follow_straight_route(plain, esc_accel, false, esc_decel);
+  ASSERT_TRUE(weaving.completed);
+  EXPECT_GT(weaving.heading_rms, 0.08);
+
+  Settings modelled;
+  modelled.actuator_dead_time = SlowDrive::transport;
+  modelled.actuator_time_constant = SlowDrive::lag;
+  modelled.wheel_accel_limit = esc_accel;
+  modelled.wheel_decel_limit = SlowDrive::host_accel;
+  const auto steady = follow_straight_route(modelled, esc_accel, true, esc_decel);
+  ASSERT_TRUE(steady.completed);
+  EXPECT_LT(steady.heading_rms, 0.04);
+  EXPECT_LT(steady.yaw_rate_rms, 0.10);
+  EXPECT_LT(3.0 * steady.heading_rms, weaving.heading_rms);
+  EXPECT_EQ(steady.stops, 0);
 }
 }  // namespace
 }  // namespace mppi_unicycle

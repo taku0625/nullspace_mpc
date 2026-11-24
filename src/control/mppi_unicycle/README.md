@@ -71,14 +71,19 @@ state. These parts differ:
 
 By default the rollouts start at the latest pose and move the robot at the input speeds. A
 drive that follows its commands late makes such a plan steer too long, and the heading swings
-from side to side. Three parameters describe how the tangential speed of each wheel follows a
+from side to side. Four parameters describe how the tangential speed of each wheel follows a
 sent command. All are zero by default, which plans as before.
 
 | Parameter | Unit | Meaning |
 | --- | --- | --- |
 | `actuator_dead_time` | s | Time from a sent command to the first reaction of the wheels |
-| `wheel_accel_limit` | m/s^2 | Rate at which the drive ramps a wheel to a new command |
+| `wheel_accel_limit` | m/s^2 | Rate at which the drive ramps a wheel up to a faster command |
+| `wheel_decel_limit` | m/s^2 | Rate at which it ramps a wheel down. Zero takes `wheel_accel_limit` |
 | `actuator_time_constant` | s | First-order lag of the wheel speed behind that ramp |
+
+The two limits differ on the Misachiya chassis: its ESCs speed a wheel up within their own
+limit and let it slow down as fast as the host asks. A wheel that changes direction slows
+down to rest within the one limit and speeds up within the other.
 
 - The node hands every command it publishes to the solver, the stops outside a solve included.
   Before a solve the solver replays them through the response, from the time of the pose to
@@ -93,9 +98,9 @@ sent command. All are zero by default, which plans as before.
 - The route progress, the goal and the stops and turns in place still follow the measured
   pose, because a wrong prediction must not skip a corner or end the route early.
 
-Take the three values from recorded wheel speeds, not from the drive configuration. If the
-acceleration limit is uncertain, use the lower value: a limit that is too high leaves part of
-the swing, and one that is too low only makes the plan more cautious.
+Take the values from recorded wheel speeds, not from the drive configuration. If a limit is
+uncertain, use the lower value: a limit that is too high leaves part of the swing, and one
+that is too low only makes the plan more cautious.
 
 ## Visualization
 
