@@ -688,6 +688,38 @@ TEST(UnicycleMppi, PassesThroughAGapAndAroundOneThatIsTooNarrow)
   }
 }
 
+TEST(UnicycleMppi, KeepsADetourOnTheSideOfAWallTheRobotIsOn)
+{
+  // Two walls beside the route leave a gap that is too narrow, so the robot passes outside
+  // the nearer one. The cheaper way between the walls lies behind that wall from there.
+  std::vector<std::array<double, 2>> walls;
+  for (int i = 0; i <= 40; ++i) {
+    walls.push_back({1.5 + 0.05 * i, 0.37});
+    walls.push_back({1.5 + 0.05 * i, -0.53});
+  }
+  const auto costmap = obstacle_costmap(walls);
+  MppiCore controller(Settings{});
+  const auto route = straight_route(5.0);
+  controller.set_route(route);
+  Pose pose;
+  double closest = std::numeric_limits<double>::infinity(), widest = 0.0;
+  bool crossed = false;
+  EXPECT_TRUE(drive(controller, pose, 150.0, costmap, [&](const Pose & at, const VOmega &) {
+      closest = std::min(closest, obstacle_distance(walls, at));
+      widest = std::max(widest, at.y);
+      // Beside the wall, the detour stays on the side of the robot.
+      for (const auto & point : controller.detour()) {
+        crossed = crossed ||
+        (at.x > 1.5 && at.x < 3.5 && at.y > 0.37 && point.x > 1.5 && point.x < 3.5 &&
+        point.y < 0.37);
+      }
+    }));
+  EXPECT_FALSE(crossed);
+  EXPECT_GT(closest, lethal_distance);
+  EXPECT_GT(widest, 0.37 + lethal_distance);
+  EXPECT_LT(distance(pose, route.back()), 0.11);
+}
+
 TEST(UnicycleMppi, StopsInFrontOfABlockedRouteAndFollowsItAsRecordedWithoutDetours)
 {
   // A wall across the route, wider than the largest detour.

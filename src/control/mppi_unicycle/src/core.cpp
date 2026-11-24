@@ -28,6 +28,7 @@ constexpr double detour_slope = detour_step / detour_spacing;  // Steepest chang
 constexpr double detour_collision_cost = 2.0;  // For a collision cost of one half.
 constexpr double detour_keep_cost = 0.8;  // For each metre away from the detour of the last solve.
 constexpr double detour_change_cost = 0.5;  // For each metre of offset change between samples.
+constexpr double detour_start_cost = 1.0;  // For each metre between the robot and the start.
 
 double square(double value)
 {
@@ -439,7 +440,7 @@ Pose MppiCore::followed_pose(double arc) const
   return pose;
 }
 
-void MppiCore::plan_detour(const Costmap & costmap)
+void MppiCore::plan_detour(const Pose & pose, const Costmap & costmap)
 {
   const auto previous = std::move(detour_);
   const long previous_first = detour_first_;
@@ -477,6 +478,28 @@ void MppiCore::plan_detour(const Costmap & costmap)
     return;
   }
 
+  const auto collision_at = [&](std::size_t i, int k) {
+      const auto & center = centers[i];
+      const double offset = k * detour_step;
+      return costmap(
+        {center.x - offset * std::sin(center.yaw), center.y + offset * std::cos(center.yaw),
+          center.yaw}).collision;
+    };
+  // The detour starts beside the robot, at an offset it can get to by moving sideways from
+  // where it is. A way that starts behind an obstacle beside the robot is none.
+  const double beside = -(pose.x - centers[0].x) * std::sin(centers[0].yaw) +
+    (pose.y - centers[0].y) * std::cos(centers[0].yaw);
+  const int here = std::clamp(static_cast<int>(std::lround(beside / detour_step)), -widest, widest);
+  int leftmost = widest, rightmost = -widest;
+  if (collision_at(0, here) < 1.0) {
+    for (leftmost = here; leftmost < widest && collision_at(0, leftmost + 1) < 1.0; ++leftmost) {
+    }
+    for (rightmost = here; rightmost > -widest && collision_at(0, rightmost - 1) < 1.0;
+      --rightmost)
+    {
+    }
+  }
+
   // The cheapest way along the samples. A sample costs its offset in metres, its collision cost
   // on a scale that rises steeply towards an obstacle, and its distance from the last detour,
   // which keeps the side once chosen. Between samples the offset changes by one step at most.
@@ -486,7 +509,6 @@ void MppiCore::plan_detour(const Costmap & costmap)
   std::vector<std::int8_t> from(count * width, 0);
   std::size_t reached = 0;
   for (std::size_t i = 0; i < count; ++i) {
-    const auto & center = centers[i];
     // The route ends where it was recorded.
     const double limit = detour_slope * (arc_.back() - arc_of(i)) + 1e-9;
     const auto last_offset = before(i);
@@ -495,8 +517,11 @@ void MppiCore::plan_detour(const Costmap & costmap)
       if (std::abs(offset) > limit) {
         continue;
       }
-      double arrival = 0.0;
+      double arrival = detour_start_cost * std::abs(offset - beside);
       int source = 0;
+      if (i == 0 && (k > leftmost || k < rightmost)) {
+        continue;
+      }
       if (i > 0) {
         arrival = unreachable;
         for (const int change : {0, -1, 1}) {
@@ -515,9 +540,7 @@ void MppiCore::plan_detour(const Costmap & costmap)
           continue;
         }
       }
-      const double collision = costmap(
-        {center.x - offset * std::sin(center.yaw), center.y + offset * std::cos(center.yaw),
-          center.yaw}).collision;
+      const double collision = collision_at(i, k);
       if (!(collision < 1.0)) {
         continue;
       }
@@ -835,7 +858,7 @@ std::optional<Solution> MppiCore::optimize(
     return std::nullopt;
   }
   update_progress(pose);
-  plan_detour(costmap);
+  plan_detour(pose, costmap);
   const auto & goal = route_.back();
   const bool rotate_only = arc_.back() - progress_ <= 2.0 * settings_.xy_goal_tolerance &&
     distance(pose, goal) <= settings_.xy_goal_tolerance;

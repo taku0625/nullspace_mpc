@@ -179,7 +179,7 @@ private:
   };
 
   Pose pose_at(double arc) const;
-  void plan_detour(const Costmap & costmap);
+  void plan_detour(const Pose & pose, const Costmap & costmap);
   double detour_offset(double arc) const;
   Pose followed_pose(double arc) const;  // The route pose with the detour applied.
   double project(const Pose & pose, double progress) const;

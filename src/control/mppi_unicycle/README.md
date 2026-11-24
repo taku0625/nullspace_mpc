@@ -92,6 +92,8 @@ them. Here the route is a recording, and nothing replans it. Three parts replace
   collision cost is charged steeply towards the lethal cost, lethal cells are not entered,
   and the offset changes by one step per sample at most, which gives ramps of 1 in 2. A
   term for the distance from the detour of the previous solve keeps the side once chosen.
+  The detour starts beside the robot, at an offset the robot can reach sideways without
+  crossing a lethal cell, so it never continues behind a wall the robot is passing.
   The detour passes outside the graded cost when there is room, through the middle of a
   gap that is too narrow for that, and around a gap that is narrower still. It returns to
   the route behind the obstacle and ends on the recorded goal. Where no way exists it leads
