@@ -3,9 +3,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace mppi_unicycle
@@ -46,6 +49,150 @@ double route_error(const std::vector<Pose> & route, const Pose & pose)
     closest = std::min(closest, std::hypot(x - along * dx, y - along * dy));
   }
   return closest;
+}
+
+// A drive that responds like the Misachiya chassis. The host limits the acceleration of both
+// wheels by one ratio, the ESC of each wheel limits it again, and the wheel speed lags behind.
+// Localization delivers each pose late and at half the rate of the control loop.
+struct SlowDrive
+{
+  static constexpr double host_accel = 0.264;  // m/s^2 of the wheel tangential speed, 28 RPM/s
+  static constexpr double lag = 0.15;
+  static constexpr double transport = 0.05;  // From a sent command to the host input.
+  static constexpr double compute = 0.01;  // From the start of a solve to the sent command.
+  static constexpr double command_timeout = 0.30;
+  static constexpr double pose_period = 0.10;
+  static constexpr double pose_latency = 0.05;
+  static constexpr double half_track = 0.14;
+
+  struct Observation
+  {
+    double time;
+    Pose pose;
+    VOmega velocity;
+  };
+
+  SlowDrive(const Pose & start, double esc_accel)
+  : esc_accel(esc_accel), pose(start), observations{{0.0, start, {}}}
+  {
+  }
+
+  VOmega velocity() const
+  {
+    return {0.5 * (wheel[0] + wheel[1]), (wheel[1] - wheel[0]) / (2.0 * half_track)};
+  }
+
+  void send(const VOmega & command, double at)
+  {
+    sent.push_back({at, command});
+  }
+
+  void step(double dt)
+  {
+    while (sent.size() > 1 && sent[1].first + transport <= time) {
+      sent.pop_front();
+    }
+    VOmega command;
+    if (!sent.empty() && sent.front().first + transport <= time &&
+      time < sent.front().first + transport + command_timeout)
+    {
+      command = sent.front().second;
+    }
+    const std::array<double, 2> target{
+      command.v - half_track * command.omega, command.v + half_track * command.omega};
+    const double slew = std::max({1.0, std::abs(target[0] - host[0]) / (host_accel * dt),
+        std::abs(target[1] - host[1]) / (host_accel * dt)});
+    for (std::size_t i = 0; i < target.size(); ++i) {
+      host[i] += (target[i] - host[i]) / slew;
+      reference[i] += std::clamp(host[i] - reference[i], -esc_accel * dt, esc_accel * dt);
+      wheel[i] += (reference[i] - wheel[i]) * (1.0 - std::exp(-dt / lag));
+    }
+    const auto motion = velocity();
+    const double heading = pose.yaw + 0.5 * dt * motion.omega;
+    pose = {pose.x + dt * motion.v * std::cos(heading), pose.y + dt * motion.v * std::sin(heading),
+      wrap(pose.yaw + dt * motion.omega)};
+    time += dt;
+    if (time + 1e-9 >= observations.back().time + pose_period) {
+      observations.push_back({time, pose, motion});
+      if (observations.size() > 8) {
+        observations.pop_front();
+      }
+    }
+  }
+
+  // The newest pose that localization has delivered by now.
+  Observation observed() const
+  {
+    auto latest = observations.front();
+    for (const auto & observation : observations) {
+      if (observation.time + pose_latency <= time + 1e-9) {
+        latest = observation;
+      }
+    }
+    return latest;
+  }
+
+  double esc_accel;
+  double time{};
+  Pose pose;
+  std::array<double, 2> host{}, reference{}, wheel{};
+  std::deque<std::pair<double, VOmega>> sent;
+  std::deque<Observation> observations;
+};
+
+struct Weave
+{
+  bool completed{};
+  double heading_rms{};
+  double yaw_rate_rms{};
+  double command_lead{};  // Largest difference between the commanded and the actual yaw rate.
+  int stops{};  // Times the controller stopped the robot to turn in place.
+};
+
+// Follows a straight route for 26 s from 0.1 m beside it and measures the motion after 6 s.
+Weave follow_straight_route(Settings settings, double esc_accel, bool compensate)
+{
+  settings.wheel_speed_limit = 0.2827;
+  MppiCore controller(settings);
+  std::vector<Pose> route;
+  for (int i = 0; i <= 200; ++i) {
+    route.push_back({0.04 * i, 0.0, 0.0});
+  }
+  controller.set_route(route);
+  SlowDrive drive({0.0, 0.10, 0.0}, esc_accel);
+  Weave weave;
+  double heading = 0.0, yaw_rate = 0.0;
+  int measured = 0;
+  bool moving = false;
+  for (int tick = 0; tick < 520; ++tick) {
+    const auto observed = drive.observed();
+    const double command_time = drive.time + SlowDrive::compute;
+    const auto result = compensate ?
+      controller.solve(observed.pose, observed.velocity, {}, Timing{observed.time, command_time}) :
+      controller.solve(observed.pose, observed.velocity, {});
+    if (!result || result->goal_reached) {
+      return weave;
+    }
+    const auto & command = result->command;
+    controller.command_sent(command, command_time);
+    drive.send(command, command_time);
+    weave.stops += moving && command.v == 0.0;
+    moving = command.v > 0.0;
+    for (int i = 0; i < 50; ++i) {
+      drive.step(0.001);
+      if (drive.time >= 6.0) {
+        const double actual = drive.velocity().omega;
+        heading += drive.pose.yaw * drive.pose.yaw;
+        yaw_rate += actual * actual;
+        weave.command_lead = std::max(weave.command_lead, std::abs(command.omega - actual));
+        ++measured;
+      }
+    }
+  }
+  weave.completed = true;
+  weave.heading_rms = std::sqrt(heading / measured);
+  weave.yaw_rate_rms = std::sqrt(yaw_rate / measured);
+  return weave;
 }
 
 TEST(UnicycleMppi, AdvancesInBodyHeadingAndWrapsYaw)
@@ -301,6 +448,16 @@ TEST(UnicycleMppi, RejectsInvalidSettingsAndAnEmptyOrBlockedRoute)
   invalid.use_sg_filter = false;
   EXPECT_NO_THROW(MppiCore{invalid});
 
+  invalid = Settings{};
+  invalid.actuator_dead_time = -0.1;
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+  invalid = Settings{};
+  invalid.wheel_accel_limit = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+  invalid = Settings{};
+  invalid.command_timeout = 0.0;
+  EXPECT_THROW(MppiCore{invalid}, std::invalid_argument);
+
   MppiCore controller(Settings{});
   EXPECT_FALSE(controller.solve({}, {}, {}));
   controller.set_route({{}, {1.0, 0.0, 0.0}});
@@ -397,6 +554,197 @@ TEST(UnicycleMppi, RepeatsTheCommandsForTheSameSeed)
     pose = advance(pose, command, control_interval);
   }
   EXPECT_TRUE(differs);
+}
+
+TEST(UnicycleMppi, PlansAsBeforeWithoutAnActuatorResponseOrTiming)
+{
+  Settings settings;
+  settings.random_seed = 5;
+  Settings slow = settings;
+  slow.actuator_dead_time = 0.1;
+  slow.actuator_time_constant = 0.2;
+  slow.wheel_accel_limit = 0.1;
+  // The first plans from the pose. The second is told the times of a current pose and has no
+  // response to replay. The third has a response and is not told the times.
+  MppiCore plain(settings), timed(settings), untimed(slow);
+  const std::vector<Pose> route{{}, {0.5, 0.0, 0.0}, {1.0, 0.3, 0.6}};
+  plain.set_route(route);
+  timed.set_route(route);
+  untimed.set_route(route);
+  Pose pose;
+  VOmega command;
+  for (int step = 0; step < 40; ++step) {
+    const double time = control_interval * step;
+    const auto a = plain.solve(pose, command, {});
+    const auto b = timed.solve(pose, command, {}, Timing{time, time});
+    const auto c = untimed.solve(pose, command, {});
+    ASSERT_TRUE(a && b && c);
+    EXPECT_EQ(a->command.v, b->command.v);
+    EXPECT_EQ(a->command.omega, b->command.omega);
+    EXPECT_EQ(a->command.v, c->command.v);
+    EXPECT_EQ(a->command.omega, c->command.omega);
+    EXPECT_EQ(timed.optimal_trajectory().front().x, pose.x);
+    command = a->command;
+    timed.command_sent(command, time);
+    untimed.command_sent(command, time);
+    pose = advance(pose, command, control_interval);
+  }
+}
+
+TEST(UnicycleMppi, StartsTheRolloutsWhereTheSentCommandsTakeTheRobot)
+{
+  const std::vector<Pose> route{{}, {3.0, 0.0, 0.0}};
+  // Sends one command every control interval from time zero, then solves at the given time with
+  // a pose measured 0.1 s earlier at the origin. Returns where the rollouts start.
+  const auto predicted_start = [&](
+    const Settings & settings, const VOmega & command, int commands, double command_time) {
+      MppiCore controller(settings);
+      controller.set_route(route);
+      for (int i = 0; i < commands; ++i) {
+        controller.command_sent(command, control_interval * i);
+      }
+      EXPECT_TRUE(controller.solve({}, command, {}, Timing{command_time - 0.1, command_time}));
+      const auto & predicted = controller.optimal_trajectory();
+      EXPECT_FALSE(predicted.empty());
+      return predicted.empty() ? Pose{} : predicted.front();
+    };
+
+  // A dead time of 0.2 s: the command of the solve acts 0.3 s after the pose was measured, and
+  // the robot follows the arc of the commands sent before for that time.
+  Settings delayed;
+  delayed.actuator_dead_time = 0.2;
+  const VOmega turning{0.15, 0.3};
+  const double angle = turning.omega * 0.3, radius = turning.v / turning.omega;
+  auto start = predicted_start(delayed, turning, 21, 1.05);
+  EXPECT_NEAR(start.x, radius * std::sin(angle), 1e-5);
+  EXPECT_NEAR(start.y, radius * (1.0 - std::cos(angle)), 1e-5);
+  EXPECT_NEAR(start.yaw, angle, 1e-9);
+
+  // Wheels that have settled on the command follow the same arc.
+  Settings slow = delayed;
+  slow.actuator_time_constant = 0.15;
+  slow.wheel_accel_limit = 0.264;
+  start = predicted_start(slow, turning, 121, 6.05);
+  EXPECT_NEAR(start.x, radius * std::sin(angle), 1e-5);
+  EXPECT_NEAR(start.y, radius * (1.0 - std::cos(angle)), 1e-5);
+  EXPECT_NEAR(start.yaw, angle, 1e-9);
+
+  // From rest the first command reaches the wheels at 0.2 s. With an acceleration limit of
+  // 0.1 m/s^2 the speed is 0.1 (t - 0.2) between the pose at 0.95 s and the start at 1.25 s.
+  const VOmega straight{0.2, 0.0};
+  Settings ramping = delayed;
+  ramping.wheel_accel_limit = 0.1;
+  start = predicted_start(ramping, straight, 21, 1.05);
+  EXPECT_NEAR(start.x, 0.05 * (1.05 * 1.05 - 0.75 * 0.75), 1e-9);
+  EXPECT_NEAR(start.y, 0.0, 1e-12);
+
+  // With a time constant of 0.15 s the speed is 0.2 (1 - exp(-(t - 0.2) / 0.15)) instead,
+  // here between the pose at 0.75 s and the start at 1.05 s.
+  Settings lagging = delayed;
+  lagging.actuator_time_constant = 0.15;
+  start = predicted_start(lagging, straight, 17, 0.85);
+  EXPECT_NEAR(
+    start.x, 0.2 * (0.3 - 0.15 * (std::exp(-0.55 / 0.15) - std::exp(-0.85 / 0.15))), 1e-9);
+
+  // The chassis stops when its commands end, so a later pose is where the robot stays.
+  start = predicted_start(delayed, turning, 21, 2.05);
+  EXPECT_EQ(start.x, 0.0);
+  EXPECT_EQ(start.y, 0.0);
+  EXPECT_EQ(start.yaw, 0.0);
+}
+
+TEST(UnicycleMppi, KeepsTheSentCommandsAcrossManeuversAndRoutes)
+{
+  Settings settings;
+  settings.actuator_dead_time = 0.2;
+  MppiCore controller(settings);
+  const std::vector<Pose> route{{}, {3.0, 0.0, 0.0}};
+  controller.set_route(route);
+  const VOmega cruising{0.15, 0.0};
+  for (int i = 0; i <= 20; ++i) {
+    controller.command_sent(cruising, control_interval * i);
+  }
+
+  // A heading far off the route makes the controller brake, which clears its plan.
+  const auto braking = controller.solve({0.0, 0.0, 1.5}, cruising, {}, Timing{1.0, 1.05});
+  ASSERT_TRUE(braking);
+  EXPECT_EQ(braking->command.v, 0.0);
+  EXPECT_EQ(braking->command.omega, 0.0);
+  EXPECT_TRUE(controller.optimal_trajectory().empty());
+  controller.set_route(route);
+
+  // The wheels still run on the commands sent before: 0.25 s at 0.15 m/s from the pose.
+  ASSERT_TRUE(controller.solve({}, {}, {}, Timing{1.0, 1.05}));
+  ASSERT_FALSE(controller.optimal_trajectory().empty());
+  EXPECT_NEAR(controller.optimal_trajectory().front().x, 0.15 * 0.25, 1e-9);
+}
+
+TEST(UnicycleMppi, StopsWeavingOnASlowDriveWithItsResponse)
+{
+  Settings modelled;
+  modelled.actuator_dead_time = SlowDrive::transport;
+  modelled.actuator_time_constant = SlowDrive::lag;
+  modelled.wheel_accel_limit = SlowDrive::host_accel;
+  for (const std::uint32_t seed : {0u, 1u, 2u}) {
+    Settings plain;
+    plain.random_seed = modelled.random_seed = seed;
+    // Planning as if the wheels followed a command at once swings the heading back and forth.
+    const auto weaving = follow_straight_route(plain, SlowDrive::host_accel, false);
+    ASSERT_TRUE(weaving.completed);
+    EXPECT_GT(weaving.heading_rms, 0.08);
+    EXPECT_GT(weaving.yaw_rate_rms, 0.20);
+
+    const auto steady = follow_straight_route(modelled, SlowDrive::host_accel, true);
+    ASSERT_TRUE(steady.completed);
+    EXPECT_LT(steady.heading_rms, 0.04);
+    EXPECT_LT(steady.yaw_rate_rms, 0.10);
+    EXPECT_LT(3.0 * steady.heading_rms, weaving.heading_rms);
+    EXPECT_EQ(steady.stops, 0);
+    // The commands do not run ahead of what the wheels deliver.
+    EXPECT_LT(steady.command_lead, 0.25);
+  }
+
+  // A response that is 30 % off in every part still steadies the heading.
+  for (const double scale : {0.7, 1.3}) {
+    Settings mismatched = modelled;
+    mismatched.random_seed = 0;
+    mismatched.actuator_dead_time *= scale;
+    mismatched.actuator_time_constant *= scale;
+    mismatched.wheel_accel_limit *= scale;
+    const auto steady = follow_straight_route(mismatched, SlowDrive::host_accel, true);
+    ASSERT_TRUE(steady.completed);
+    EXPECT_LT(steady.heading_rms, 0.04);
+    EXPECT_LT(steady.yaw_rate_rms, 0.10);
+    EXPECT_EQ(steady.stops, 0);
+  }
+}
+
+TEST(UnicycleMppi, FollowsAnEscWithATighterAccelerationLimit)
+{
+  const double esc_accel = 0.094;  // 10 RPM/s
+  Settings plain;
+  // Without the response the heading swings past 45 degrees and the robot stops to turn back.
+  const auto weaving = follow_straight_route(plain, esc_accel, false);
+  ASSERT_TRUE(weaving.completed);
+  EXPECT_GT(weaving.heading_rms, 0.25);
+  EXPECT_GT(weaving.stops, 0);
+
+  Settings modelled;
+  modelled.actuator_dead_time = SlowDrive::transport;
+  modelled.actuator_time_constant = SlowDrive::lag;
+  modelled.wheel_accel_limit = esc_accel;
+  const auto steady = follow_straight_route(modelled, esc_accel, true);
+  ASSERT_TRUE(steady.completed);
+  EXPECT_LT(steady.heading_rms, 0.04);
+  EXPECT_LT(steady.yaw_rate_rms, 0.10);
+  EXPECT_EQ(steady.stops, 0);
+
+  // A limit taken from the host, almost three times too high, still removes most of the swing.
+  modelled.wheel_accel_limit = SlowDrive::host_accel;
+  const auto optimistic = follow_straight_route(modelled, esc_accel, true);
+  ASSERT_TRUE(optimistic.completed);
+  EXPECT_LT(3.0 * optimistic.heading_rms, weaving.heading_rms);
+  EXPECT_EQ(optimistic.stops, 0);
 }
 }  // namespace
 }  // namespace mppi_unicycle

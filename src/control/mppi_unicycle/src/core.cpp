@@ -14,6 +14,11 @@ namespace
 {
 constexpr double pi = 3.14159265358979323846;
 constexpr double no_path = std::numeric_limits<double>::infinity();
+// Limits of the prediction of the rollout start, in seconds: the replay of the wheel speeds
+// before the pose time, the age of a pose, and the step of the pose between them.
+constexpr double max_settling_time = 10.0;
+constexpr double max_pose_age = 2.0;
+constexpr double pose_step = 0.02;
 
 double square(double value)
 {
@@ -62,6 +67,67 @@ Pose advance(const Pose & pose, const VOmega & input, double dt)
     wrap(pose.yaw + dt * input.omega),
   };
 }
+
+namespace
+{
+// Moves the pose with the heading it has halfway through the turn. The mean velocity of a wheel
+// response over the step places the pose closer than the heading at the start of the step does.
+Pose advance_midway(const Pose & pose, const VOmega & mean, double dt)
+{
+  const double turn = dt * mean.omega;
+  return {
+    pose.x + dt * mean.v * std::cos(pose.yaw + 0.5 * turn),
+    pose.y + dt * mean.v * std::sin(pose.yaw + 0.5 * turn),
+    wrap(pose.yaw + turn),
+  };
+}
+
+// Moves one wheel toward a constant target for dt and returns its mean speed over that time.
+// The reference ramps to the target at the acceleration limit and rests there. The speed
+// follows the reference with the time constant. Both phases have a closed solution, so the
+// result does not depend on how a time span is divided into steps.
+double drive_wheel(
+  double & reference, double & speed, double target, double dt, double time_constant,
+  double accel_limit)
+{
+  if (!(dt > 0.0)) {
+    return speed;
+  }
+  const double gap = target - reference;
+  const double ramp = accel_limit > 0.0 ? std::min(dt, std::abs(gap) / accel_limit) : 0.0;
+  double travelled = 0.0;
+  if (ramp > 0.0) {
+    const double slope = std::copysign(accel_limit, gap);
+    const double reached = reference + slope * ramp;
+    if (time_constant > 0.0) {
+      // Behind a ramping reference the speed settles at the reference minus slope * tau.
+      const double decay = std::exp(-ramp / time_constant);
+      const double offset = speed - reference + slope * time_constant;
+      travelled += (reference - slope * time_constant) * ramp + 0.5 * slope * ramp * ramp +
+        offset * time_constant * (1.0 - decay);
+      speed = reached - slope * time_constant + offset * decay;
+    } else {
+      travelled += (reference + 0.5 * slope * ramp) * ramp;
+      speed = reached;
+    }
+    reference = reached;
+  }
+  const double rest = dt - ramp;
+  if (rest > 0.0) {
+    reference = target;
+    if (time_constant > 0.0) {
+      const double decay = std::exp(-rest / time_constant);
+      const double offset = speed - target;
+      travelled += target * rest + offset * time_constant * (1.0 - decay);
+      speed = target + offset * decay;
+    } else {
+      travelled += target * rest;
+      speed = target;
+    }
+  }
+  return travelled / dt;
+}
+}  // namespace
 
 std::vector<double> savitzky_golay_coefficients(int half_window, int order)
 {
@@ -141,6 +207,7 @@ MppiCore::MppiCore(Settings settings)
     settings.velocity_weight, settings.heading_weight, settings.distance_weight,
     settings.collision_weight, settings.terminal_weight, settings.control_change_weight[0],
     settings.control_change_weight[1], settings.wheel_speed_limit, settings.wheel_speed_floor,
+    settings.actuator_dead_time, settings.actuator_time_constant, settings.wheel_accel_limit,
   };
   if (settings.samples < 3 || settings.prediction_steps < 2 ||
     !std::all_of(positive.begin(), positive.end(),
@@ -151,6 +218,9 @@ MppiCore::MppiCore(Settings settings)
     !(settings.alpha >= 0.0 && settings.alpha <= 1.0))
   {
     throw std::invalid_argument("Invalid MPPI horizon, noise, limits or cost weights");
+  }
+  if (!std::isfinite(settings.command_timeout) || settings.command_timeout <= 0.0) {
+    throw std::invalid_argument("The command timeout must be positive and finite");
   }
   // With a floor the robot drives with both wheels at it or faster and turns in place with
   // both wheels at it, so the speed limits have to leave room for both.
@@ -231,23 +301,23 @@ Pose MppiCore::pose_at(double arc) const
     std::atan2(b.y - a.y, b.x - a.x)};
 }
 
-void MppiCore::update_progress(const Pose & pose)
+double MppiCore::project(const Pose & pose, double progress) const
 {
-  if (progress_ >= arc_.back()) {
-    return;
+  if (progress >= arc_.back()) {
+    return progress;
   }
   // Bound projection to nearby segments to preserve ordering at path crossings.
-  const double end = std::min(arc_.back(), progress_ + std::max(0.4, settings_.max_linear_speed * 0.3));
-  auto segment = std::upper_bound(arc_.begin(), arc_.end(), progress_) - arc_.begin();
-  double closest_arc = progress_;
-  double closest_distance = distance(pose, pose_at(progress_));
+  const double end = std::min(arc_.back(), progress + std::max(0.4, settings_.max_linear_speed * 0.3));
+  auto segment = std::upper_bound(arc_.begin(), arc_.end(), progress) - arc_.begin();
+  double closest_arc = progress;
+  double closest_distance = distance(pose, pose_at(progress));
   for (; segment < static_cast<decltype(segment)>(arc_.size()) && arc_[segment - 1] < end; ++segment) {
     const auto & a = route_[segment - 1];
     const auto & b = route_[segment];
     const double span = arc_[segment] - arc_[segment - 1];
     const double along = ((pose.x - a.x) * (b.x - a.x) + (pose.y - a.y) * (b.y - a.y)) / span;
     const double projected = std::clamp(
-      arc_[segment - 1] + along, std::max(arc_[segment - 1], progress_),
+      arc_[segment - 1] + along, std::max(arc_[segment - 1], progress),
       std::min(arc_[segment], end));
     const double error = distance(pose, pose_at(projected));
     if (error < closest_distance) {
@@ -255,7 +325,12 @@ void MppiCore::update_progress(const Pose & pose)
       closest_arc = projected;
     }
   }
-  progress_ = closest_arc;
+  return closest_arc;
+}
+
+void MppiCore::update_progress(const Pose & pose)
+{
+  progress_ = project(pose, progress_);
 }
 
 VOmega MppiCore::limit(VOmega input, bool rotate_only) const
@@ -281,16 +356,16 @@ VOmega MppiCore::limit(VOmega input, bool rotate_only) const
   return input;
 }
 
-MppiCore::Tracking MppiCore::track(bool rotate_only) const
+MppiCore::Tracking MppiCore::track(bool rotate_only, double progress) const
 {
   const double horizon = settings_.prediction_steps * settings_.prediction_step;
   const double reach = std::min(settings_.reference_speed, settings_.max_linear_speed) * horizon;
   Tracking tracking{
-    rotate_only, rotate_only || arc_.back() - progress_ <= reach, pose_at(progress_ + reach),
+    rotate_only, rotate_only || arc_.back() - progress <= reach, pose_at(progress + reach),
     2.0 * settings_.xy_goal_tolerance, {}};
-  const double end = progress_ + settings_.max_linear_speed * horizon + tracking.lookahead;
+  const double end = progress + settings_.max_linear_speed * horizon + tracking.lookahead;
   auto segment = std::min<std::size_t>(
-    std::upper_bound(arc_.begin(), arc_.end(), progress_) - arc_.begin(), arc_.size() - 1);
+    std::upper_bound(arc_.begin(), arc_.end(), progress) - arc_.begin(), arc_.size() - 1);
   for (; segment > 0 && segment < arc_.size() && arc_[segment - 1] <= end; ++segment) {
     const auto & a = route_[segment - 1];
     const auto & b = route_[segment];
@@ -317,9 +392,117 @@ void MppiCore::sample_noise()
   }
 }
 
+bool MppiCore::wheels_modelled() const
+{
+  return settings_.actuator_time_constant > 0.0 || settings_.wheel_accel_limit > 0.0;
+}
+
+VOmega MppiCore::drive(Wheels & wheels, const VOmega & command, double dt) const
+{
+  const double half_track = 0.5 * settings_.track_width;
+  const std::array<double, 2> target{
+    command.v - half_track * command.omega, command.v + half_track * command.omega};
+  std::array<double, 2> mean;
+  for (std::size_t i = 0; i < target.size(); ++i) {
+    mean[i] = drive_wheel(
+      wheels.reference[i], wheels.speed[i], target[i], dt, settings_.actuator_time_constant,
+      settings_.wheel_accel_limit);
+  }
+  return {0.5 * (mean[0] + mean[1]), (mean[1] - mean[0]) / settings_.track_width};
+}
+
+void MppiCore::command_sent(const VOmega & command, double time)
+{
+  if (!std::isfinite(time) || !std::isfinite(command.v) || !std::isfinite(command.omega)) {
+    return;
+  }
+  if (!sent_.empty() && time < sent_.back().time) {
+    sent_.clear();  // The clock was set back.
+  }
+  sent_.push_back({time, command});
+  // A replay looks back by the settling time of the wheels and the age of the pose. One older
+  // command stays, because the wheels were following it at the start of the replay.
+  const double oldest = time - (max_settling_time + max_pose_age + 1.0) -
+    settings_.actuator_dead_time;
+  while (sent_.size() > 1 && sent_[1].time < oldest) {
+    sent_.pop_front();
+  }
+}
+
+std::optional<MppiCore::Start> MppiCore::predict(const Pose & pose, const Timing & timing) const
+{
+  if (!std::isfinite(timing.pose_time) || !std::isfinite(timing.command_time)) {
+    return std::nullopt;
+  }
+  const double dead_time = settings_.actuator_dead_time;
+  const bool modelled = wheels_modelled();
+  // The command of this solve starts to act on the wheels at the end of the prediction.
+  const double end = timing.command_time + dead_time;
+  const double begin = std::clamp(timing.pose_time, end - max_pose_age, end);
+  if (!modelled && begin == end) {
+    return std::nullopt;
+  }
+
+  // The wheel speeds at the pose time come from the commands before it. The replay starts early
+  // enough for the wheels to have forgotten the speeds they are given there.
+  double settling = 0.0;
+  if (modelled) {
+    settling = 5.0 * settings_.actuator_time_constant;
+    if (settings_.wheel_accel_limit > 0.0) {
+      const double fastest = settings_.wheel_speed_limit > 0.0 ? settings_.wheel_speed_limit :
+        settings_.max_linear_speed + 0.5 * settings_.track_width * settings_.max_angular_speed;
+      settling += 2.0 * fastest / settings_.wheel_accel_limit;
+    }
+    settling = std::min(settling, max_settling_time);
+  }
+  double time = begin - settling;
+  const auto arrival = [&](std::size_t index) {return sent_[index].time + dead_time;};
+  // The command at this index is the next one to reach the wheels. The one before it acts on
+  // them until it times out.
+  std::size_t next = 0;
+  while (next < sent_.size() && arrival(next) <= time) {
+    ++next;
+  }
+  Start start{pose, {}, modelled};
+  if (modelled && next > 0 && time < arrival(next - 1) + settings_.command_timeout) {
+    // The wheels have settled on the command that acts on them at the start of the replay.
+    const auto & command = sent_[next - 1].command;
+    const double half_track = 0.5 * settings_.track_width;
+    start.wheels.reference = {
+      command.v - half_track * command.omega, command.v + half_track * command.omega};
+    start.wheels.speed = start.wheels.reference;
+  }
+  while (time < end) {
+    VOmega command;
+    double until = end;
+    if (next > 0) {
+      const double expiry = arrival(next - 1) + settings_.command_timeout;
+      if (time < expiry) {
+        command = sent_[next - 1].command;
+        until = std::min(until, expiry);
+      }
+    }
+    if (next < sent_.size()) {
+      until = std::min(until, arrival(next));
+    }
+    // The pose moves in short steps from the time it was measured.
+    until = std::min(until, time < begin ? begin : time + pose_step);
+    const double dt = until - time;
+    const VOmega motion = modelled ? drive(start.wheels, command, dt) : command;
+    if (time >= begin) {
+      start.pose = advance_midway(start.pose, motion, dt);
+    }
+    time = until;
+    while (next < sent_.size() && arrival(next) <= time) {
+      ++next;
+    }
+  }
+  return start;
+}
+
 double MppiCore::stage_cost(
-  const Pose & state, const VOmega & input, const VOmega & previous, const Tracking & tracking,
-  const Costmap & costmap) const
+  const Pose & state, double forward_speed, const VOmega & input, const VOmega & previous,
+  const Tracking & tracking, const Costmap & costmap) const
 {
   const auto map = costmap ? costmap(state) : MapCost{};
   const auto & goal = route_.back();
@@ -368,7 +551,7 @@ double MppiCore::stage_cost(
       std::atan2(ahead.y - state.y, ahead.x - state.x) : ahead.yaw;
     const double heading_error = wrap(state.yaw - yaw);
     const double speed = std::min(settings_.reference_speed, settings_.max_linear_speed);
-    cost += settings_.velocity_weight * square(input.v * std::cos(heading_error) - speed) +
+    cost += settings_.velocity_weight * square(forward_speed * std::cos(heading_error) - speed) +
       settings_.heading_weight * square(heading_error);
   }
   return cost + settings_.collision_weight * map.collision +
@@ -378,19 +561,29 @@ double MppiCore::stage_cost(
 }
 
 double MppiCore::rollout(
-  Pose state, const VOmega * controls, Pose * states, const Tracking & tracking,
+  const Start & start, const VOmega * controls, Pose * states, const Tracking & tracking,
   const Costmap & costmap) const
 {
   const double input_weight = settings_.lambda * (1.0 - settings_.alpha);
+  Pose state = start.pose;
+  Wheels wheels = start.wheels;
   VOmega previous = last_command_;
   double cost = 0.0;
   for (int step = 0; step < settings_.prediction_steps; ++step) {
     const auto & input = controls[step];
-    state = advance(state, input, settings_.prediction_step);
+    double forward_speed = input.v;
+    if (start.wheels_modelled) {
+      // The robot moves at the speeds the wheels reach, which trail the inputs.
+      const auto motion = drive(wheels, input, settings_.prediction_step);
+      state = advance_midway(state, motion, settings_.prediction_step);
+      forward_speed = motion.v;
+    } else {
+      state = advance(state, input, settings_.prediction_step);
+    }
     if (states) {
       states[step] = state;
     }
-    cost += stage_cost(state, input, previous, tracking, costmap) +
+    cost += stage_cost(state, forward_speed, input, previous, tracking, costmap) +
       input_weight * (nominal_[step].v * input.v / settings_.sigma[0] +
       nominal_[step].omega * input.omega / settings_.sigma[1]);
     previous = input;
@@ -429,6 +622,18 @@ void MppiCore::reset()
 
 std::optional<Solution> MppiCore::solve(
   const Pose & pose, const VOmega & measured, const Costmap & costmap)
+{
+  return optimize(pose, measured, costmap, nullptr);
+}
+
+std::optional<Solution> MppiCore::solve(
+  const Pose & pose, const VOmega & measured, const Costmap & costmap, const Timing & timing)
+{
+  return optimize(pose, measured, costmap, &timing);
+}
+
+std::optional<Solution> MppiCore::optimize(
+  const Pose & pose, const VOmega & measured, const Costmap & costmap, const Timing * timing)
 {
   const auto started = std::chrono::steady_clock::now();
   optimal_.clear();
@@ -490,7 +695,18 @@ std::optional<Solution> MppiCore::solve(
     }
   }
 
-  const auto tracking = track(rotate_only);
+  // The measured pose decided the progress and the maneuver above. The rollouts start where the
+  // robot is predicted to be when this command reaches the wheels, and follow the route from
+  // the position of that pose along it.
+  Start start{pose, {}, false};
+  double progress = progress_;
+  if (timing) {
+    if (const auto predicted = predict(pose, *timing)) {
+      start = *predicted;
+      progress = project(start.pose, progress_);
+    }
+  }
+  const auto tracking = track(rotate_only, progress);
   const int samples = settings_.samples;
   const int steps = settings_.prediction_steps;
   if (!settings_.reduce_computation) {
@@ -511,7 +727,7 @@ std::optional<Solution> MppiCore::solve(
       controls_[row + step] = limit(input, rotate_only);
     }
     costs_[sample] = rollout(
-      pose, controls_.data() + row, states_.data() + row, tracking, costmap);
+      start, controls_.data() + row, states_.data() + row, tracking, costmap);
   }
 
   const auto best = std::min_element(costs_.begin(), costs_.end());
@@ -542,8 +758,8 @@ std::optional<Solution> MppiCore::solve(
   }
 
   optimal_.resize(steps + 1);
-  optimal_.front() = pose;
-  if (!std::isfinite(rollout(pose, optimum.data(), optimal_.data() + 1, tracking, costmap))) {
+  optimal_.front() = start.pose;
+  if (!std::isfinite(rollout(start, optimum.data(), optimal_.data() + 1, tracking, costmap))) {
     // The weighted mean of collision-free inputs can still produce a collision.
     const auto row = static_cast<std::size_t>(best - costs_.begin()) * steps;
     std::copy_n(controls_.begin() + row, steps, optimum.begin());

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -54,6 +55,22 @@ struct Settings
   int sg_filter_half_window_size{4};
   int sg_filter_poly_order{6};
   std::uint32_t random_seed{0};
+  // Response of the drive between a sent command and the wheel speeds. A command reaches the
+  // wheels after the dead time. The reference of each wheel then follows it within the
+  // acceleration limit, and the wheel speed follows the reference with a first-order lag.
+  // Zero leaves a part out. With all three at zero the wheels follow a command at once.
+  double actuator_dead_time{0.0};  // s
+  double actuator_time_constant{0.0};  // s
+  double wheel_accel_limit{0.0};  // m/s^2 of the wheel tangential speed
+  // Time in seconds for which the chassis keeps driving on its last command.
+  double command_timeout{0.30};
+};
+
+// Times of one solve in seconds on the clock of command_sent().
+struct Timing
+{
+  double pose_time{};  // When the pose was measured.
+  double command_time{};  // When the command of this solve is sent.
 };
 
 struct MapCost
@@ -86,11 +103,20 @@ public:
 
   bool set_wheel_speed_limits(double minimum, double maximum);
   void set_route(std::vector<Pose> route);
+  // Records a command sent to the chassis, zero commands included. Times must not decrease.
+  void command_sent(const VOmega & command, double time);
+  // Plans from the pose as if the wheels followed a command at once.
   std::optional<Solution> solve(
     const Pose & pose, const VOmega & measured, const Costmap & costmap);
+  // Plans from the state predicted for the time the command starts to act on the wheels. The
+  // recorded commands are replayed through the actuator response from the pose time until then.
+  // The route progress, the goal and the maneuvers still follow the measured pose.
+  std::optional<Solution> solve(
+    const Pose & pose, const VOmega & measured, const Costmap & costmap, const Timing & timing);
 
   // Predictions of the latest solve(). They are empty when it returned without optimizing.
-  // The optimal trajectory starts at the solved pose and continues with one pose per step.
+  // The optimal trajectory starts at the pose the rollouts started from, which is the solved
+  // pose or the one predicted from it, and continues with one pose per step.
   const std::vector<Pose> & optimal_trajectory() const;
   // Collision-free sampled trajectories in order of increasing cost.
   std::vector<std::vector<Pose>> elite_trajectories(std::size_t count) const;
@@ -112,19 +138,46 @@ private:
     std::vector<Segment> window;  // Route segments within reach of the rollouts, in path order.
   };
 
+  // Tangential speeds of the left and right wheel in m/s.
+  struct Wheels
+  {
+    std::array<double, 2> reference{};  // Speeds the drive is ramping the wheels to.
+    std::array<double, 2> speed{};
+  };
+
+  // State at the start of the rollouts.
+  struct Start
+  {
+    Pose pose;
+    Wheels wheels;
+    bool wheels_modelled{};  // The rollouts move the wheels through the actuator response.
+  };
+
+  struct SentCommand
+  {
+    double time;
+    VOmega command;
+  };
+
   Pose pose_at(double arc) const;
+  double project(const Pose & pose, double progress) const;
   void update_progress(const Pose & pose);
   VOmega limit(VOmega input, bool rotate_only) const;
-  Tracking track(bool rotate_only) const;
+  Tracking track(bool rotate_only, double progress) const;
   void sample_noise();
+  bool wheels_modelled() const;
+  VOmega drive(Wheels & wheels, const VOmega & command, double dt) const;
+  std::optional<Start> predict(const Pose & pose, const Timing & timing) const;
   double stage_cost(
-    const Pose & state, const VOmega & input, const VOmega & previous, const Tracking & tracking,
-    const Costmap & costmap) const;
+    const Pose & state, double forward_speed, const VOmega & input, const VOmega & previous,
+    const Tracking & tracking, const Costmap & costmap) const;
   double rollout(
-    Pose state, const VOmega * controls, Pose * states, const Tracking & tracking,
+    const Start & start, const VOmega * controls, Pose * states, const Tracking & tracking,
     const Costmap & costmap) const;
   VOmega smooth(const std::vector<VOmega> & controls);
   void reset();
+  std::optional<Solution> optimize(
+    const Pose & pose, const VOmega & measured, const Costmap & costmap, const Timing * timing);
 
   Settings settings_;
   std::uint64_t noise_draws_{};
@@ -148,6 +201,7 @@ private:
   std::vector<Pose> optimal_;
   std::vector<double> filter_coefficients_;
   std::vector<VOmega> filter_history_;  // Past filtered commands, oldest first.
+  std::deque<SentCommand> sent_;  // Commands sent to the chassis, oldest first.
   double calculation_time_ms_{};
 };
 }  // namespace mppi_unicycle

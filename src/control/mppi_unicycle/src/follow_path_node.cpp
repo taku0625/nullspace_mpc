@@ -1,6 +1,7 @@
 #include "mppi_unicycle/action/follow_path.hpp"
 #include "ros_inputs.hpp"
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -58,6 +59,7 @@ public:
     startup_timeout_(positive_parameter(*this, "startup_timeout", 2.0)),
     pose_timeout_(positive_parameter(*this, "pose_timeout", 0.4)),
     stall_timeout_(positive_parameter(*this, "stall_timeout", 8.0)),
+    compensate_pose_age_(declare_parameter("compensate_pose_age", false)),
     tf_(get_clock()), listener_(tf_, this, false)
   {
     if (base_.empty() || base_.front() == '/') {
@@ -71,7 +73,13 @@ public:
         get_logger(), "wheel_speed_floor is 0: wheel commands can fall below the start speed of "
         "sensorless ESCs, which stop with an overspeed fault");
     }
+    RCLCPP_INFO(
+      get_logger(), "Actuator response: dead time %.3f s, time constant %.3f s, wheel "
+      "acceleration limit %.3f m/s^2, pose age %s", settings_.actuator_dead_time,
+      settings_.actuator_time_constant, settings_.wheel_accel_limit,
+      compensate_pose_age_ ? "compensated" : "ignored");
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
+    predicted_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("mpc/predicted_pose", 5);
     optimal_trajectory_ = create_publisher<MarkerArray>("mpc/optimal_traj", 1);
     sampled_trajectories_ = create_publisher<MarkerArray>("mpc/sampled_traj", 1);
     calculation_time_ = create_publisher<std_msgs::msg::Float32>("mpc/calc_time", 1);
@@ -263,14 +271,27 @@ private:
     command.twist.linear.x = input.v;
     command.twist.angular.z = input.omega;
     command_->publish(command);
+    // The solver replays what the chassis received, including the stops sent outside a solve.
+    core_.command_sent(input, rclcpp::Time(command.header.stamp).seconds());
   }
 
-  void publish_predictions()
+  void publish_predictions(const rclcpp::Time & start_time)
   {
     const auto & optimal = core_.optimal_trajectory();
     if (optimal.empty()) {
       return;
     }
+    // Where the solver expects the robot when its command starts to act. Localization at that
+    // time shows how far the prediction is off.
+    geometry_msgs::msg::PoseStamped start;
+    start.header.frame_id = "map";
+    start.header.stamp = start_time;
+    start.pose.position.x = optimal.front().x;
+    start.pose.position.y = optimal.front().y;
+    start.pose.orientation.z = std::sin(0.5 * optimal.front().yaw);
+    start.pose.orientation.w = std::cos(0.5 * optimal.front().yaw);
+    predicted_pose_->publish(start);
+
     std_msgs::msg::Float32 time;
     time.data = static_cast<float>(core_.calculation_time_ms());
     calculation_time_->publish(time);
@@ -401,12 +422,19 @@ private:
         return cost;
       };
 
-    const auto result = core_.solve(pose, measured, evaluate_cost);
+    // The command leaves after the solve, which takes about as long as the last one did.
+    const rclcpp::Time command_time =
+      now() + rclcpp::Duration::from_seconds(1e-3 * core_.calculation_time_ms());
+    const double sent = command_time.seconds();
+    const double observed = compensate_pose_age_ ?
+      std::clamp(localization_->stamp.seconds(), sent - pose_timeout_, sent) : sent;
+    const auto result = core_.solve(pose, measured, evaluate_cost, Timing{observed, sent});
     if (!result) {
       finish("MPPI did not find a feasible trajectory");
       return;
     }
-    publish_predictions();
+    publish_predictions(
+      command_time + rclcpp::Duration::from_seconds(settings_.actuator_dead_time));
     if (!fresh_localization() || !fresh_costmap() || !fresh_drive_state()) {
       finish("A navigation input expired during optimization");
       return;
@@ -438,6 +466,7 @@ private:
   MppiCore core_;
   const std::string base_;
   const double wheel_radius_, drive_state_timeout_, startup_timeout_, pose_timeout_, stall_timeout_;
+  const bool compensate_pose_age_;
   double costmap_timeout_{};
   tf2_ros::Buffer tf_;
   tf2_ros::TransformListener listener_;
@@ -454,6 +483,7 @@ private:
   std::optional<Clock::time_point> collision_received_;
   std::optional<DriveState> drive_state_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr predicted_pose_;
   rclcpp::Publisher<MarkerArray>::SharedPtr optimal_trajectory_, sampled_trajectories_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr calculation_time_;
   rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr reference_sub_;

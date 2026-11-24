@@ -67,12 +67,43 @@ state. These parts differ:
 - A predicted pose on a lethal or unknown collision cell rejects its sample.
   The action aborts when every sample is rejected.
 
+## Actuator response
+
+By default the rollouts start at the latest pose and move the robot at the input speeds. A
+drive that follows its commands late makes such a plan steer too long, and the heading swings
+from side to side. Three parameters describe how the tangential speed of each wheel follows a
+sent command. All are zero by default, which plans as before.
+
+| Parameter | Unit | Meaning |
+| --- | --- | --- |
+| `actuator_dead_time` | s | Time from a sent command to the first reaction of the wheels |
+| `wheel_accel_limit` | m/s^2 | Rate at which the drive ramps a wheel to a new command |
+| `actuator_time_constant` | s | First-order lag of the wheel speed behind that ramp |
+
+- The node hands every command it publishes to the solver, the stops outside a solve included.
+  Before a solve the solver replays them through the response, from the time of the pose to
+  the time its new command reaches the wheels, and starts the rollouts at the pose and wheel
+  speeds this gives. The chassis stops on a command older than `command_timeout` (0.30 s), and
+  so does the replay.
+- `compensate_pose_age: true` takes the TF stamp as the time of the pose, so the replay also
+  covers the delay of localization. Otherwise the pose counts as current.
+- With a time constant or an acceleration limit, the rollouts move the wheels through the same
+  response. The speed cost then uses the speed the robot reaches. The costs of the inputs stay
+  on the inputs.
+- The route progress, the goal and the stops and turns in place still follow the measured
+  pose, because a wrong prediction must not skip a corner or end the route early.
+
+Take the three values from recorded wheel speeds, not from the drive configuration. If the
+acceleration limit is uncertain, use the lower value: a limit that is too high leaves part of
+the swing, and one that is too low only makes the plan more cautious.
+
 ## Visualization
 
 While a route is followed, the node publishes in the `map` frame:
 
 | Topic | Type | Content |
 | --- | --- | --- |
+| `/mpc/predicted_pose` | `geometry_msgs/msg/PoseStamped` | Pose the rollouts start from, stamped with the time the command reaches the wheels |
 | `/mpc/optimal_traj` | `visualization_msgs/msg/MarkerArray` | Predicted poses of the optimal inputs as red arrows |
 | `/mpc/sampled_traj` | `visualization_msgs/msg/MarkerArray` | The 100 sampled trajectories of lowest cost as blue lines |
 | `/mpc/calc_time` | `std_msgs/msg/Float32` | Duration of the last solve in milliseconds |

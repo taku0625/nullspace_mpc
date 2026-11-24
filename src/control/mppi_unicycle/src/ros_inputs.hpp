@@ -45,6 +45,12 @@ inline Settings declare_settings(rclcpp::Node & node)
     "sg_filter_half_window_size", settings.sg_filter_half_window_size);
   settings.sg_filter_poly_order = node.declare_parameter(
     "sg_filter_poly_order", settings.sg_filter_poly_order);
+  settings.actuator_dead_time = node.declare_parameter(
+    "actuator_dead_time", settings.actuator_dead_time);
+  settings.actuator_time_constant = node.declare_parameter(
+    "actuator_time_constant", settings.actuator_time_constant);
+  settings.wheel_accel_limit = node.declare_parameter("wheel_accel_limit", settings.wheel_accel_limit);
+  settings.command_timeout = node.declare_parameter("command_timeout", settings.command_timeout);
 
   auto pair = [&node](const std::string & name, std::array<double, 2> defaults) {
       const auto value = node.declare_parameter(name, std::vector<double>{defaults[0], defaults[1]});
