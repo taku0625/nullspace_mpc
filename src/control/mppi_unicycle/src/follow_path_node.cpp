@@ -30,9 +30,9 @@ using DriveState = misachiya_drive::msg::DriveState;
 using Marker = visualization_msgs::msg::Marker;
 using MarkerArray = visualization_msgs::msg::MarkerArray;
 constexpr auto distance_layer = "distance_error";
-constexpr std::size_t visualized_samples = 100;
 
-Marker prediction_marker(const rclcpp::Time & stamp, const char * name, int id)
+// The markers disappear this long after the controller stopped publishing them.
+Marker prediction_marker(const rclcpp::Time & stamp, const char * name, int id, double lifetime)
 {
   Marker marker;
   marker.header.frame_id = "map";
@@ -41,9 +41,17 @@ Marker prediction_marker(const rclcpp::Time & stamp, const char * name, int id)
   marker.id = id;
   marker.action = Marker::ADD;
   marker.pose.orientation.w = 1.0;
-  // The markers disappear when the controller stops solving.
-  marker.lifetime.nanosec = 300000000U;
+  marker.lifetime = rclcpp::Duration::from_seconds(lifetime);
   return marker;
+}
+
+geometry_msgs::msg::Point marker_point(const Pose & pose, double height)
+{
+  geometry_msgs::msg::Point point;
+  point.x = pose.x;
+  point.y = pose.y;
+  point.z = height;
+  return point;
 }
 }  // namespace
 
@@ -59,11 +67,18 @@ public:
     startup_timeout_(positive_parameter(*this, "startup_timeout", 2.0)),
     pose_timeout_(positive_parameter(*this, "pose_timeout", 0.4)),
     stall_timeout_(positive_parameter(*this, "stall_timeout", 8.0)),
+    visualization_interval_(positive_parameter(*this, "visualization_interval", 0.2)),
     compensate_pose_age_(declare_parameter("compensate_pose_age", false)),
+    collision_offsets_(collision_offsets(*this)),
+    sampled_points_(declare_parameter("sampled_trajectory_points", 5)),
     tf_(get_clock()), listener_(tf_, this, false)
   {
     if (base_.empty() || base_.front() == '/') {
       throw std::invalid_argument("Set a valid base_frame");
+    }
+    if (sampled_points_ < 1 || sampled_points_ > settings_.prediction_steps) {
+      throw std::invalid_argument(
+              "sampled_trajectory_points must lie between 1 and prediction_steps");
     }
     RCLCPP_INFO(
       get_logger(), "Wheel speed floor %.3f m/s, limit %.3f m/s", settings_.wheel_speed_floor,
@@ -79,6 +94,7 @@ public:
       settings_.actuator_dead_time, settings_.actuator_time_constant, settings_.wheel_accel_limit,
       settings_.wheel_decel_limit > 0.0 ? settings_.wheel_decel_limit : settings_.wheel_accel_limit,
       compensate_pose_age_ ? "compensated" : "ignored");
+    warn_without_turning_room();
     command_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 5);
     predicted_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("mpc/predicted_pose", 5);
     optimal_trajectory_ = create_publisher<MarkerArray>("mpc/optimal_traj", 1);
@@ -141,10 +157,15 @@ public:
         costmap_topic, 1, [this](const nav_msgs::msg::OccupancyGrid & grid) {
           if (grid_map::GridMapRosConverter::fromOccupancyGrid(grid, "collision_cost", collision_)) {
             collision_received_ = Clock::now();
+            warn_about_a_small_costmap();
           } else {
             collision_received_.reset();
           }
         });
+      RCLCPP_INFO(
+        get_logger(), "Collision costmap %s looked up at %zu points on the body axis, detours "
+        "up to %.2f m beside the route examined %.2f m ahead", costmap_topic.c_str(),
+        collision_offsets_.size(), settings_.detour_max_offset, settings_.detour_range);
     }
     const auto interval = positive_parameter(*this, "control_interval", 0.05);
     timer_ = create_wall_timer(std::chrono::duration<double>(interval), [this] {step();});
@@ -158,6 +179,42 @@ private:
     Pose pose;
     std::optional<VOmega> velocity;
   };
+
+  // Driving at the reference speed, the wheels can differ by what is left up to their speed
+  // limit and down to their floor. Too little of it leaves no way to steer around an obstacle.
+  void warn_without_turning_room() const
+  {
+    if (settings_.wheel_speed_limit <= 0.0) {
+      return;
+    }
+    const double half_track = 0.5 * settings_.track_width;
+    const double cruise = std::min(settings_.reference_speed, settings_.max_linear_speed);
+    const double room = std::min(
+      settings_.wheel_speed_limit - cruise, cruise - settings_.wheel_speed_floor) / half_track;
+    if (room < 0.3) {
+      RCLCPP_WARN(
+        get_logger(), "At the reference speed %.2f m/s the wheel speed limit %.3f m/s and floor "
+        "%.3f m/s leave %.2f rad/s for turning. The robot slows down for every turn and steers "
+        "late around obstacles. A reference_speed near %.2f m/s leaves the most room",
+        cruise, settings_.wheel_speed_limit, settings_.wheel_speed_floor, std::max(room, 0.0),
+        0.5 * (settings_.wheel_speed_limit + settings_.wheel_speed_floor));
+    }
+  }
+
+  // Cells outside the costmap count as obstacles, so a detour cannot leave it.
+  void warn_about_a_small_costmap()
+  {
+    const double ahead = settings_.detour_range +
+      *std::max_element(collision_offsets_.begin(), collision_offsets_.end());
+    const double needed = std::hypot(ahead, settings_.detour_max_offset);
+    const double covered = 0.5 * collision_.getLength().minCoeff();
+    if (settings_.detour_range > 0.0 && settings_.detour_max_offset > 0.0 && covered < needed) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 10000, "The collision costmap reaches %.2f m from its "
+        "center, but detours examine the route up to %.2f m from the robot. Enlarge the costmap "
+        "or reduce detour_range and detour_max_offset", covered, needed);
+    }
+  }
 
   bool fresh_localization() const
   {
@@ -300,14 +357,12 @@ private:
     const rclcpp::Time stamp = now();
     if (optimal_trajectory_->get_subscription_count() > 0) {
       MarkerArray arrows;
-      arrows.markers.reserve(optimal.size());
+      arrows.markers.reserve(optimal.size() + 1);
       for (const auto & pose : optimal) {
         auto arrow = prediction_marker(
-          stamp, "optimal_trajectory", static_cast<int>(arrows.markers.size()));
+          stamp, "optimal_trajectory", static_cast<int>(arrows.markers.size()), 0.3);
         arrow.type = Marker::ARROW;
-        arrow.pose.position.x = pose.x;
-        arrow.pose.position.y = pose.y;
-        arrow.pose.position.z = 0.02;
+        arrow.pose.position = marker_point(pose, 0.02);
         arrow.pose.orientation.z = std::sin(0.5 * pose.yaw);
         arrow.pose.orientation.w = std::cos(0.5 * pose.yaw);
         arrow.scale.x = 0.04;
@@ -317,30 +372,66 @@ private:
         arrow.color.a = 1.0f;
         arrows.markers.push_back(arrow);
       }
+      // The route as it is followed around obstacles.
+      const auto detour = core_.detour();
+      if (detour.size() > 1) {
+        auto line = prediction_marker(stamp, "detour", 0, 0.3);
+        line.type = Marker::LINE_STRIP;
+        line.scale.x = 0.02;
+        line.color.r = 1.0f;
+        line.color.g = 0.8f;
+        line.color.a = 0.9f;
+        for (const auto & pose : detour) {
+          line.points.push_back(marker_point(pose, 0.015));
+        }
+        arrows.markers.push_back(line);
+      }
       optimal_trajectory_->publish(arrows);
     }
-    if (sampled_trajectories_->get_subscription_count() > 0) {
-      MarkerArray lines;
-      for (const auto & trajectory : core_.elite_trajectories(visualized_samples)) {
-        auto line = prediction_marker(
-          stamp, "sampled_trajectories", static_cast<int>(lines.markers.size()));
-        line.type = Marker::LINE_STRIP;
-        line.scale.x = 0.004;
-        line.color.g = 0.35f;
-        line.color.b = 1.0f;
-        line.color.a = 0.5f;
-        line.points.reserve(trajectory.size());
-        for (const auto & pose : trajectory) {
-          geometry_msgs::msg::Point point;
-          point.x = pose.x;
-          point.y = pose.y;
-          point.z = 0.01;
-          line.points.push_back(point);
-        }
-        lines.markers.push_back(line);
-      }
-      sampled_trajectories_->publish(lines);
+
+    const auto elapsed = std::chrono::duration<double>(Clock::now() - samples_published_).count();
+    if (sampled_trajectories_->get_subscription_count() > 0 && elapsed >= visualization_interval_) {
+      samples_published_ = Clock::now();
+      sampled_trajectories_->publish(sampled_markers(stamp, optimal.front()));
     }
+  }
+
+  // Every sample as a few line segments, all in one marker for the samples that reach a lethal
+  // cell and one for the others. One marker per sample would cost several megabytes a second.
+  MarkerArray sampled_markers(const rclcpp::Time & stamp, const Pose & start) const
+  {
+    const double lifetime = visualization_interval_ + 0.3;
+    auto feasible = prediction_marker(stamp, "sampled_trajectories", 0, lifetime);
+    feasible.color.g = 0.35f;
+    feasible.color.b = 1.0f;
+    feasible.color.a = 0.35f;
+    auto rejected = prediction_marker(stamp, "sampled_trajectories", 1, lifetime);
+    rejected.color.r = 1.0f;
+    rejected.color.a = 0.5f;
+    const auto & states = core_.sampled_states();
+    const auto & costs = core_.sample_costs();
+    const auto steps = static_cast<std::size_t>(settings_.prediction_steps);
+    const auto points = static_cast<std::size_t>(sampled_points_);
+    for (std::size_t sample = 0; sample < costs.size(); ++sample) {
+      auto & line = std::isfinite(costs[sample]) ? feasible : rejected;
+      auto last = marker_point(start, 0.01);
+      for (std::size_t i = 1; i <= points; ++i) {
+        const auto next = marker_point(states[sample * steps + i * steps / points - 1], 0.01);
+        line.points.push_back(last);
+        line.points.push_back(next);
+        last = next;
+      }
+    }
+    MarkerArray lines;
+    for (auto * line : {&feasible, &rejected}) {
+      line->type = Marker::LINE_LIST;
+      line->scale.x = 0.004;
+      if (line->points.empty()) {
+        line->action = Marker::DELETE;
+      }
+      lines.markers.push_back(std::move(*line));
+    }
+    return lines;
   }
 
   void finish(const std::string & message, bool reached = false)
@@ -416,9 +507,13 @@ private:
           distance_layer, position, grid_map::InterpolationMethods::INTER_LINEAR) :
           outside_reference_distance_;
         if (collision_sub_) {
-          cost.collision = collision_at(collision_, {
-            to_costmap->x + c * state.x - s * state.y,
-            to_costmap->y + s * state.x + c * state.y});
+          // The largest cost under the points on the body axis counts.
+          const double ahead_x = std::cos(state.yaw), ahead_y = std::sin(state.yaw);
+          for (const double offset : collision_offsets_) {
+            const double x = state.x + offset * ahead_x, y = state.y + offset * ahead_y;
+            cost.collision = std::max(cost.collision, collision_at(collision_, {
+              to_costmap->x + c * x - s * y, to_costmap->y + s * x + c * y}));
+          }
         }
         return cost;
       };
@@ -430,7 +525,10 @@ private:
     const double observed = compensate_pose_age_ ?
       std::clamp(localization_->stamp.seconds(), sent - pose_timeout_, sent) : sent;
     const auto result = core_.solve(pose, measured, evaluate_cost, Timing{observed, sent});
-    if (!result) {
+    // With a costmap, no feasible trajectory means that obstacles block the way. The robot
+    // stops and waits for them to leave until the stall timeout ends the route.
+    const bool blocked = !result && collision_sub_;
+    if (!result && !blocked) {
       finish("MPPI did not find a feasible trajectory");
       return;
     }
@@ -440,7 +538,9 @@ private:
       finish("A navigation input expired during optimization");
       return;
     }
-    if (result->goal_reached && std::abs(measured.v) < 0.04 && std::abs(measured.omega) < 0.15) {
+    if (result && result->goal_reached && std::abs(measured.v) < 0.04 &&
+      std::abs(measured.omega) < 0.15)
+    {
       finish("Reached the recorded route goal", true);
       return;
     }
@@ -453,11 +553,16 @@ private:
       last_progress_ = time;
     } else if (std::chrono::duration<double>(time - last_progress_).count() > stall_timeout_) {
       const auto reason = drive_state_ ? " (chassis: " + drive_state_->reason + ")" : "";
-      finish("The chassis stopped making progress along the recorded route" + reason);
+      finish(blocked ? "Obstacles kept the recorded route blocked" :
+        "The chassis stopped making progress along the recorded route" + reason);
       return;
     }
 
-    publish(result->command);
+    if (blocked) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Obstacles block the route. Waiting for them to leave");
+    }
+    publish(blocked ? VOmega{} : result->command);
     auto feedback = std::make_shared<FollowPath::Feedback>();
     feedback->distance_to_goal = static_cast<float>(distance(pose, end_));
     goal_->publish_feedback(feedback);
@@ -467,7 +572,10 @@ private:
   MppiCore core_;
   const std::string base_;
   const double wheel_radius_, drive_state_timeout_, startup_timeout_, pose_timeout_, stall_timeout_;
+  const double visualization_interval_;
   const bool compensate_pose_age_;
+  const std::vector<double> collision_offsets_;
+  const int sampled_points_;
   double costmap_timeout_{};
   tf2_ros::Buffer tf_;
   tf2_ros::TransformListener listener_;
@@ -477,7 +585,7 @@ private:
   Pose end_;
   std::optional<Localization> localization_;
   std::optional<Pose> progress_pose_;
-  Clock::time_point started_, last_progress_;
+  Clock::time_point started_, last_progress_, samples_published_;
   std::optional<grid_map::GridMap> reference_;
   double outside_reference_distance_{};
   grid_map::GridMap collision_;

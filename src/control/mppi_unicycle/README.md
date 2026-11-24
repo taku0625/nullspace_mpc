@@ -4,7 +4,8 @@ The recorded-route controller takes a `FollowPath` action and a matching
 `/reference_costmap` from the Misachiya navigation launch. It uses live
 `map → base_link` TF and publishes `geometry_msgs/msg/TwistStamped` to
 `/cmd_vel`. The action server stops the chassis on completion, cancellation,
-stale localization or collision data, and loss of route progress.
+stale localization or collision data, and loss of route progress. With a
+collision costmap it leads the robot around obstacles on the route.
 
 ## Solver
 
@@ -65,7 +66,51 @@ state. These parts differ:
   than 45 degrees off the heading, and at the goal yaw, it stops both wheels,
   turns in place and stops again before it drives on.
 - A predicted pose on a lethal or unknown collision cell rejects its sample.
-  The action aborts when every sample is rejected.
+  Without a collision costmap the action aborts when every sample is rejected.
+
+## Obstacles
+
+`collision_costmap_topic` names a `nav_msgs/msg/OccupancyGrid` with costs from 0 to 100. A
+cell of 99 or more, an unknown cell and everything outside the grid are lethal. The other
+costs count as `collision_weight * cost / 100` in every step of a rollout. Without the topic
+the controller does not look for obstacles.
+
+The original `mppi_3d` read the local costmap of `move_base`, which inflated the obstacles by
+the radius of the robot, and it followed a path that a global planner had already laid around
+them. Here the route is a recording, and nothing replans it. Three parts replace that:
+
+- **Body.** `collision_offsets` lists distances along the body axis from the base frame. The
+  costmap is looked up at each of these points of a predicted pose, and the largest cost
+  counts. The costmap has to be inflated by the radius of a circle around each point, so that
+  the circles cover the body. The default `[0.0]` looks only at the base frame.
+- **Detour.** The collision cost alone does not take the robot around an obstacle on the
+  route. Slowing down costs less than leaving the route, and at the wheel speed floor the
+  robot cannot turn, so it stops in front of the obstacle. Before each solve the route up to
+  `detour_range` ahead of the robot is therefore sampled every 0.1 m, and each sample may
+  move sideways in steps of 0.05 m up to `detour_max_offset`. The cheapest sequence of
+  offsets is followed instead of the recorded route: an offset costs its size, a cell with
+  collision cost is charged steeply towards the lethal cost, lethal cells are not entered,
+  and the offset changes by one step per sample at most, which gives ramps of 1 in 2. A
+  term for the distance from the detour of the previous solve keeps the side once chosen.
+  The detour passes outside the graded cost when there is room, through the middle of a
+  gap that is too narrow for that, and around a gap that is narrower still. It returns to
+  the route behind the obstacle and ends on the recorded goal. Where no way exists it leads
+  as far as the robot can go. Without cost on the route the route is followed as recorded,
+  and the commands are the same as without a costmap. Either parameter at zero switches the
+  detours off.
+- **Blocked route.** When every sample is rejected, the robot stops and waits for the
+  obstacle to leave. The action aborts with `Obstacles kept the recorded route blocked`
+  when the robot has not moved for `stall_timeout` (8 s).
+
+While a detour is followed, the distance cost refers to the detour instead of the
+`distance_error` layer, and the stops and turns in place refer to it as well. The route
+progress and the goal still follow the recorded route.
+
+The costmap must reach `hypot(detour_range + largest offset of collision_offsets,
+detour_max_offset)` from the robot, or the part of a detour outside it counts as blocked. The
+node warns when it is smaller. It also warns when `reference_speed` leaves less than
+0.3 rad/s between the wheel speed limit and the wheel speed floor: the robot then has to slow
+down for every turn and steers late around obstacles.
 
 ## Actuator response
 
@@ -109,8 +154,15 @@ While a route is followed, the node publishes in the `map` frame:
 | Topic | Type | Content |
 | --- | --- | --- |
 | `/mpc/predicted_pose` | `geometry_msgs/msg/PoseStamped` | Pose the rollouts start from, stamped with the time the command reaches the wheels |
-| `/mpc/optimal_traj` | `visualization_msgs/msg/MarkerArray` | Predicted poses of the optimal inputs as red arrows |
-| `/mpc/sampled_traj` | `visualization_msgs/msg/MarkerArray` | The 100 sampled trajectories of lowest cost as blue lines |
+| `/mpc/optimal_traj` | `visualization_msgs/msg/MarkerArray` | Predicted poses of the optimal inputs as red arrows, and the detour that is followed as a yellow line (namespace `detour`) |
+| `/mpc/sampled_traj` | `visualization_msgs/msg/MarkerArray` | Every sampled trajectory: blue for the samples that count, red for the ones rejected on a lethal cell |
 | `/mpc/calc_time` | `std_msgs/msg/Float32` | Duration of the last solve in milliseconds |
 
 The marker arrays are built only while they have a subscriber.
+
+The sampled trajectories are two `LINE_LIST` markers, one per color. Each sample is drawn
+with `sampled_trajectory_points` segments (5) from the start of the rollouts to equally spaced
+poses of its prediction, and the markers are published every `visualization_interval` (0.2 s).
+With 512 samples this is 123 kB per message and 0.6 MB/s. One `LINE_STRIP` marker per sample
+at the control rate takes 8.7 MB/s for all samples, and took 1.7 MB/s for the 100 best ones
+that were published before.

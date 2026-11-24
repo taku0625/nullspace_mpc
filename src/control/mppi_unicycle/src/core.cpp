@@ -20,6 +20,15 @@ constexpr double max_settling_time = 10.0;
 constexpr double max_pose_age = 2.0;
 constexpr double pose_step = 0.02;
 
+// A detour is a lateral offset for each route sample ahead of the robot.
+constexpr double detour_spacing = 0.10;  // m between the samples along the route
+constexpr double detour_step = 0.05;  // m between the offsets a sample can take
+constexpr double detour_slope = detour_step / detour_spacing;  // Steepest change of the offset.
+// Costs of a detour in metres of offset at one sample.
+constexpr double detour_collision_cost = 2.0;  // For a collision cost of one half.
+constexpr double detour_keep_cost = 0.8;  // For each metre away from the detour of the last solve.
+constexpr double detour_change_cost = 0.5;  // For each metre of offset change between samples.
+
 double square(double value)
 {
   return value * value;
@@ -220,7 +229,7 @@ MppiCore::MppiCore(Settings settings)
     settings.collision_weight, settings.terminal_weight, settings.control_change_weight[0],
     settings.control_change_weight[1], settings.wheel_speed_limit, settings.wheel_speed_floor,
     settings.actuator_dead_time, settings.actuator_time_constant, settings.wheel_accel_limit,
-    settings.wheel_decel_limit,
+    settings.wheel_decel_limit, settings.detour_range, settings.detour_max_offset,
   };
   if (settings.samples < 3 || settings.prediction_steps < 2 ||
     !std::all_of(positive.begin(), positive.end(),
@@ -230,7 +239,7 @@ MppiCore::MppiCore(Settings settings)
     !(settings.exploration >= 0.0 && settings.exploration <= 1.0) ||
     !(settings.alpha >= 0.0 && settings.alpha <= 1.0))
   {
-    throw std::invalid_argument("Invalid MPPI horizon, noise, limits or cost weights");
+    throw std::invalid_argument("Invalid MPPI horizon, noise, limits, cost weights or detour");
   }
   if (!std::isfinite(settings.command_timeout) || settings.command_timeout <= 0.0) {
     throw std::invalid_argument("The command timeout must be positive and finite");
@@ -297,6 +306,7 @@ void MppiCore::set_route(std::vector<Pose> route)
     route_.push_back(point);
   }
   progress_ = 0.0;
+  detour_.clear();
   maneuver_ = Maneuver::drive;
   reset();
 }
@@ -374,9 +384,28 @@ MppiCore::Tracking MppiCore::track(bool rotate_only, double progress) const
   const double horizon = settings_.prediction_steps * settings_.prediction_step;
   const double reach = std::min(settings_.reference_speed, settings_.max_linear_speed) * horizon;
   Tracking tracking{
-    rotate_only, rotate_only || arc_.back() - progress <= reach, pose_at(progress + reach),
-    2.0 * settings_.xy_goal_tolerance, {}};
+    rotate_only, rotate_only || arc_.back() - progress <= reach, followed_pose(progress + reach),
+    2.0 * settings_.xy_goal_tolerance, {}, false};
   const double end = progress + settings_.max_linear_speed * horizon + tracking.lookahead;
+  for (std::size_t i = 0; i < detour_.size() && !tracking.detoured; ++i) {
+    const double arc = (detour_first_ + static_cast<long>(i)) * detour_spacing;
+    tracking.detoured = detour_[i] != 0.0 && arc >= progress - detour_spacing &&
+      arc <= end + detour_spacing;
+  }
+  if (tracking.detoured) {
+    // The offset changes between the points of the route, so the window is sampled anew.
+    const double last = std::min(end, arc_.back());
+    const double spacing = 0.5 * detour_spacing;
+    for (double arc = std::max(0.0, progress - spacing); arc < last; arc += spacing) {
+      const auto a = followed_pose(arc);
+      const auto b = followed_pose(std::min(arc + spacing, arc_.back()));
+      const double length = distance(a, b);
+      if (length > 1e-6) {
+        tracking.window.push_back({a.x, a.y, b.x - a.x, b.y - a.y, length});
+      }
+    }
+    return tracking;
+  }
   auto segment = std::min<std::size_t>(
     std::upper_bound(arc_.begin(), arc_.end(), progress) - arc_.begin(), arc_.size() - 1);
   for (; segment > 0 && segment < arc_.size() && arc_[segment - 1] <= end; ++segment) {
@@ -386,6 +415,146 @@ MppiCore::Tracking MppiCore::track(bool rotate_only, double progress) const
     tracking.window.push_back({a.x, a.y, b.x - a.x, b.y - a.y, length});
   }
   return tracking;
+}
+
+double MppiCore::detour_offset(double arc) const
+{
+  if (detour_.empty()) {
+    return 0.0;
+  }
+  const double index = std::clamp(
+    arc / detour_spacing - static_cast<double>(detour_first_), 0.0,
+    static_cast<double>(detour_.size() - 1));
+  const auto lower = static_cast<std::size_t>(index);
+  const auto upper = std::min(lower + 1, detour_.size() - 1);
+  return detour_[lower] + (index - static_cast<double>(lower)) * (detour_[upper] - detour_[lower]);
+}
+
+Pose MppiCore::followed_pose(double arc) const
+{
+  auto pose = pose_at(arc);
+  const double offset = detour_offset(arc);
+  pose.x -= offset * std::sin(pose.yaw);
+  pose.y += offset * std::cos(pose.yaw);
+  return pose;
+}
+
+void MppiCore::plan_detour(const Costmap & costmap)
+{
+  const auto previous = std::move(detour_);
+  const long previous_first = detour_first_;
+  detour_.clear();
+  if (!costmap || settings_.detour_range <= 0.0 || settings_.detour_max_offset <= 0.0) {
+    return;
+  }
+  // The route ahead of the robot is sampled every detour_spacing, and each sample can move
+  // sideways in steps of detour_step.
+  const long first = static_cast<long>(progress_ / detour_spacing);
+  const long last = static_cast<long>(
+    std::ceil(std::min(progress_ + settings_.detour_range, arc_.back()) / detour_spacing));
+  const auto count = static_cast<std::size_t>(last - first + 1);
+  const int widest = static_cast<int>(settings_.detour_max_offset / detour_step + 1e-9);
+  const auto arc_of = [&](std::size_t i) {
+      return std::min((first + static_cast<long>(i)) * detour_spacing, arc_.back());
+    };
+  const auto before = [&](std::size_t i) -> std::optional<double> {
+      const long index = first + static_cast<long>(i) - previous_first;
+      if (index < 0 || index >= static_cast<long>(previous.size())) {
+        return std::nullopt;
+      }
+      return previous[index];
+    };
+
+  // Without cost on the route and without a detour to return from, the route stays as recorded.
+  std::vector<Pose> centers(count);
+  bool obstructed = false;
+  for (std::size_t i = 0; i < count; ++i) {
+    centers[i] = pose_at(arc_of(i));
+    obstructed = obstructed || !(costmap(centers[i]).collision <= 0.0) ||
+      before(i).value_or(0.0) != 0.0;
+  }
+  if (!obstructed || widest < 1) {
+    return;
+  }
+
+  // The cheapest way along the samples. A sample costs its offset in metres, its collision cost
+  // on a scale that rises steeply towards an obstacle, and its distance from the last detour,
+  // which keeps the side once chosen. Between samples the offset changes by one step at most.
+  const int width = 2 * widest + 1;
+  const double unreachable = std::numeric_limits<double>::infinity();
+  std::vector<double> total(count * width, unreachable);
+  std::vector<std::int8_t> from(count * width, 0);
+  std::size_t reached = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto & center = centers[i];
+    // The route ends where it was recorded.
+    const double limit = detour_slope * (arc_.back() - arc_of(i)) + 1e-9;
+    const auto last_offset = before(i);
+    for (int k = -widest; k <= widest; ++k) {
+      const double offset = k * detour_step;
+      if (std::abs(offset) > limit) {
+        continue;
+      }
+      double arrival = 0.0;
+      int source = 0;
+      if (i > 0) {
+        arrival = unreachable;
+        for (const int change : {0, -1, 1}) {
+          const int other = k + change;
+          if (other < -widest || other > widest) {
+            continue;
+          }
+          const double cost = total[(i - 1) * width + other + widest] +
+            (change != 0 ? detour_change_cost * detour_step : 0.0);
+          if (cost < arrival) {
+            arrival = cost;
+            source = change;
+          }
+        }
+        if (!std::isfinite(arrival)) {
+          continue;
+        }
+      }
+      const double collision = costmap(
+        {center.x - offset * std::sin(center.yaw), center.y + offset * std::cos(center.yaw),
+          center.yaw}).collision;
+      if (!(collision < 1.0)) {
+        continue;
+      }
+      total[i * width + k + widest] = arrival + std::abs(offset) +
+        detour_collision_cost * collision / (1.0 - collision) +
+        (last_offset ? detour_keep_cost * std::abs(offset - *last_offset) : 0.0);
+      from[i * width + k + widest] = static_cast<std::int8_t>(source);
+      reached = i;
+    }
+  }
+
+  // Where every way is blocked, the detour leads as far as the robot can get.
+  int k = 0;
+  double best = unreachable;
+  for (int step = 0; step <= widest; ++step) {
+    for (const int candidate : {step, -step}) {
+      const double cost = total[reached * width + candidate + widest];
+      if (cost < best) {
+        best = cost;
+        k = candidate;
+      }
+    }
+  }
+  if (!std::isfinite(best)) {
+    return;
+  }
+  std::vector<double> offsets(count, k * detour_step);
+  bool any = false;
+  for (std::size_t i = reached + 1; i-- > 0; ) {
+    offsets[i] = k * detour_step;
+    any = any || k != 0;
+    k += from[i * width + k + widest];
+  }
+  if (any) {
+    detour_ = std::move(offsets);
+    detour_first_ = first;
+  }
 }
 
 void MppiCore::sample_noise()
@@ -577,7 +746,8 @@ double MppiCore::stage_cost(
       settings_.heading_weight * square(heading_error);
   }
   return cost + settings_.collision_weight * map.collision +
-         settings_.distance_weight * map.distance.value_or(route_distance) +
+         settings_.distance_weight *
+         (tracking.detoured ? route_distance : map.distance.value_or(route_distance)) +
          settings_.control_change_weight[0] * square(input.v - previous.v) +
          settings_.control_change_weight[1] * square(input.omega - previous.omega);
 }
@@ -665,6 +835,7 @@ std::optional<Solution> MppiCore::optimize(
     return std::nullopt;
   }
   update_progress(pose);
+  plan_detour(costmap);
   const auto & goal = route_.back();
   const bool rotate_only = arc_.back() - progress_ <= 2.0 * settings_.xy_goal_tolerance &&
     distance(pose, goal) <= settings_.xy_goal_tolerance;
@@ -673,7 +844,7 @@ std::optional<Solution> MppiCore::optimize(
     return Solution{{}, true};
   }
   if (wheel_min_speed_ > 0.0) {
-    const auto lookahead = pose_at(progress_ + 2.0 * settings_.xy_goal_tolerance);
+    const auto lookahead = followed_pose(progress_ + 2.0 * settings_.xy_goal_tolerance);
     const double target = rotate_only ? goal.yaw :
       std::atan2(lookahead.y - pose.y, lookahead.x - pose.x);
     const double error = wrap(target - pose.yaw);
@@ -754,6 +925,8 @@ std::optional<Solution> MppiCore::optimize(
 
   const auto best = std::min_element(costs_.begin(), costs_.end());
   if (!std::isfinite(*best)) {
+    // The start of the rejected rollouts is kept, so that they can still be drawn.
+    optimal_.assign(1, start.pose);
     reset();
     return std::nullopt;
   }
@@ -817,6 +990,26 @@ std::vector<std::vector<Pose>> MppiCore::elite_trajectories(std::size_t count) c
     trajectories.emplace_back(row, row + steps);
   }
   return trajectories;
+}
+
+const std::vector<Pose> & MppiCore::sampled_states() const
+{
+  return states_;
+}
+
+const std::vector<double> & MppiCore::sample_costs() const
+{
+  return costs_;
+}
+
+std::vector<Pose> MppiCore::detour() const
+{
+  std::vector<Pose> poses;
+  poses.reserve(detour_.size());
+  for (std::size_t i = 0; i < detour_.size(); ++i) {
+    poses.push_back(followed_pose((detour_first_ + static_cast<long>(i)) * detour_spacing));
+  }
+  return poses;
 }
 
 double MppiCore::calculation_time_ms() const

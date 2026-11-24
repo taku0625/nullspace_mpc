@@ -67,6 +67,13 @@ struct Settings
   double wheel_decel_limit{0.0};
   // Time in seconds for which the chassis keeps driving on its last command.
   double command_timeout{0.30};
+  // Detours around obstacles. With a costmap, the route up to detour_range ahead of the robot
+  // is examined. Where it passes through collision cost, the robot follows it at lateral
+  // offsets of up to detour_max_offset instead: outside the cost where there is room, through
+  // the least cost in a narrow gap, and on the side taken before while both stay open. Zero in
+  // either value follows the route as recorded.
+  double detour_range{2.5};  // m
+  double detour_max_offset{1.0};  // m
 };
 
 // Times of one solve in seconds on the clock of command_sent().
@@ -117,12 +124,20 @@ public:
   std::optional<Solution> solve(
     const Pose & pose, const VOmega & measured, const Costmap & costmap, const Timing & timing);
 
-  // Predictions of the latest solve(). They are empty when it returned without optimizing.
+  // Predictions of the latest solve(). They are empty when it returned without sampling.
   // The optimal trajectory starts at the pose the rollouts started from, which is the solved
-  // pose or the one predicted from it, and continues with one pose per step.
+  // pose or the one predicted from it, and continues with one pose per step. When every sample
+  // was rejected it holds only that first pose.
   const std::vector<Pose> & optimal_trajectory() const;
   // Collision-free sampled trajectories in order of increasing cost.
   std::vector<std::vector<Pose>> elite_trajectories(std::size_t count) const;
+  // Every sampled trajectory, prediction_steps poses per sample, and the cost of each sample.
+  // A sample that reaches a lethal cell has an infinite cost.
+  const std::vector<Pose> & sampled_states() const;
+  const std::vector<double> & sample_costs() const;
+  // The stretch of the route ahead of the robot as the latest solve() followed it around
+  // obstacles. Empty while the route is followed as recorded.
+  std::vector<Pose> detour() const;
   double calculation_time_ms() const;
 
 private:
@@ -139,6 +154,7 @@ private:
     Pose target;  // Route position one horizon ahead. It takes the role of the goal state.
     double lookahead;  // Distance along the route to the point that gives the reference direction.
     std::vector<Segment> window;  // Route segments within reach of the rollouts, in path order.
+    bool detoured;  // The window is offset from the recorded route.
   };
 
   // Tangential speeds of the left and right wheel in m/s.
@@ -163,6 +179,9 @@ private:
   };
 
   Pose pose_at(double arc) const;
+  void plan_detour(const Costmap & costmap);
+  double detour_offset(double arc) const;
+  Pose followed_pose(double arc) const;  // The route pose with the detour applied.
   double project(const Pose & pose, double progress) const;
   void update_progress(const Pose & pose);
   VOmega limit(VOmega input, bool rotate_only) const;
@@ -187,6 +206,10 @@ private:
   std::vector<Pose> route_;
   std::vector<double> arc_;
   double progress_{};
+  // Lateral offsets of the followed route, left positive, at the arcs
+  // (detour_first_ + i) * detour_spacing. Empty while the route is followed as recorded.
+  std::vector<double> detour_;
+  long detour_first_{};
   // With a wheel speed floor the robot drives forward or turns in place, and brakes in between.
   enum class Maneuver {drive, brake, turn};
 

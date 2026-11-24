@@ -51,6 +51,46 @@ double route_error(const std::vector<Pose> & route, const Pose & pose)
   return closest;
 }
 
+// Collision cost of a robot covered by two circles on its axis, as a costmap inflated around
+// obstacle points holds it: lethal up to a distance from a point, then falling to zero.
+constexpr double lethal_distance = 0.29;
+constexpr double graded_distance = 0.25;
+
+double obstacle_distance(const std::vector<std::array<double, 2>> & points, const Pose & pose)
+{
+  double closest = std::numeric_limits<double>::infinity();
+  for (const double along : {-0.01, 0.22}) {
+    const double x = pose.x + along * std::cos(pose.yaw), y = pose.y + along * std::sin(pose.yaw);
+    for (const auto & point : points) {
+      closest = std::min(closest, std::hypot(x - point[0], y - point[1]));
+    }
+  }
+  return closest;
+}
+
+Costmap obstacle_costmap(std::vector<std::array<double, 2>> points)
+{
+  return [points = std::move(points)](const Pose & pose) {
+           const double distance = obstacle_distance(points, pose);
+           MapCost cost;
+           if (distance <= lethal_distance) {
+             cost.collision = std::numeric_limits<double>::infinity();
+           } else if (distance < lethal_distance + graded_distance) {
+             cost.collision = 0.98 * (1.0 - (distance - lethal_distance) / graded_distance);
+           }
+           return cost;
+         };
+}
+
+std::vector<Pose> straight_route(double length)
+{
+  std::vector<Pose> route;
+  for (int i = 0; 0.04 * i <= length + 1e-9; ++i) {
+    route.push_back({0.04 * i, 0.0, 0.0});
+  }
+  return route;
+}
+
 // A drive that responds like the Misachiya chassis. The host limits the acceleration of both
 // wheels by one ratio, the ESC of each wheel limits it again, and the wheel speed lags behind.
 // Localization delivers each pose late and at half the rate of the control loop.
@@ -467,10 +507,15 @@ TEST(UnicycleMppi, RejectsInvalidSettingsAndAnEmptyOrBlockedRoute)
   MppiCore controller(Settings{});
   EXPECT_FALSE(controller.solve({}, {}, {}));
   controller.set_route({{}, {1.0, 0.0, 0.0}});
-  EXPECT_FALSE(controller.solve({}, {}, [](const Pose &) {
+  EXPECT_FALSE(controller.solve({0.1, 0.0, 0.0}, {}, [](const Pose &) {
       return MapCost{std::numeric_limits<double>::infinity(), {}};
     }));
-  EXPECT_TRUE(controller.optimal_trajectory().empty());
+  // The rejected samples stay available with the pose they started from.
+  ASSERT_EQ(controller.optimal_trajectory().size(), 1u);
+  EXPECT_EQ(controller.optimal_trajectory().front().x, 0.1);
+  EXPECT_TRUE(std::none_of(controller.sample_costs().begin(), controller.sample_costs().end(),
+    [](double cost) {return std::isfinite(cost);}));
+  EXPECT_TRUE(controller.elite_trajectories(10).empty());
 }
 
 TEST(UnicycleMppi, KeepsPathOrderAtARevisitedStart)
@@ -525,6 +570,21 @@ TEST(UnicycleMppi, PredictsTrajectoriesForVisualization)
   EXPECT_GT(feasible, 20u);
   EXPECT_LT(feasible, static_cast<std::size_t>(settings.samples));
 
+  // Every sample is available with its cost, the rejected ones included.
+  const auto & costs = controller.sample_costs();
+  const auto & states = controller.sampled_states();
+  ASSERT_EQ(costs.size(), static_cast<std::size_t>(settings.samples));
+  ASSERT_EQ(states.size(), costs.size() * settings.prediction_steps);
+  std::size_t finite = 0;
+  for (std::size_t sample = 0; sample < costs.size(); ++sample) {
+    const auto row = states.begin() + sample * settings.prediction_steps;
+    const bool hits = std::any_of(row, row + settings.prediction_steps,
+        [](const Pose & state) {return state.y > 0.01;});
+    EXPECT_EQ(std::isfinite(costs[sample]), !hits);
+    finite += std::isfinite(costs[sample]);
+  }
+  EXPECT_EQ(finite, feasible);
+
   // Nothing is predicted once the goal is reached.
   controller.set_route({{}, {0.05, 0.0, 0.0}});
   const auto reached = controller.solve({0.05, 0.0, 0.0}, {}, {});
@@ -532,6 +592,158 @@ TEST(UnicycleMppi, PredictsTrajectoriesForVisualization)
   EXPECT_TRUE(reached->goal_reached);
   EXPECT_TRUE(controller.optimal_trajectory().empty());
   EXPECT_TRUE(controller.elite_trajectories(10).empty());
+}
+
+TEST(UnicycleMppi, DetoursAroundAnObstacleOnTheRoute)
+{
+  for (const double across : {0.0, 0.15, -0.2}) {
+    SCOPED_TRACE(across);
+    MppiCore controller(Settings{});
+    const auto route = straight_route(5.0);
+    controller.set_route(route);
+    const std::vector<std::array<double, 2>> obstacle{{2.0, across}};
+    const auto costmap = obstacle_costmap(obstacle);
+
+    Pose pose;
+    double closest = std::numeric_limits<double>::infinity(), widest = 0.0;
+    int stops = 0;
+    bool moving = false, detoured = false;
+    EXPECT_TRUE(drive(controller, pose, 90.0, costmap, [&](const Pose & at, const VOmega & command) {
+        closest = std::min(closest, obstacle_distance(obstacle, at));
+        widest = std::abs(at.y) > std::abs(widest) ? at.y : widest;
+        stops += moving && command.v == 0.0;
+        moving = command.v > 0.0;
+        detoured = detoured || !controller.detour().empty();
+      }));
+    EXPECT_LT(distance(pose, route.back()), 0.11);
+    EXPECT_TRUE(detoured);
+    // The robot passes outside the graded cost, on the side that takes the smaller offset.
+    EXPECT_GT(closest, lethal_distance + graded_distance - 0.03);
+    EXPECT_LT(std::abs(widest), lethal_distance + graded_distance + std::abs(across) + 0.08);
+    if (across != 0.0) {
+      EXPECT_LT(widest * across, 0.0);
+    }
+    EXPECT_EQ(stops, 0);
+    // The route is followed as recorded again behind the obstacle.
+    EXPECT_TRUE(controller.detour().empty());
+  }
+}
+
+TEST(UnicycleMppi, KeepsTheSideOfADetourWhileTheObstacleMoves)
+{
+  MppiCore controller(Settings{});
+  controller.set_route(straight_route(5.0));
+  Pose pose;
+  VOmega command;
+  int side = 0, changes = 0;
+  for (int tick = 0; tick < 1600; ++tick) {
+    // The obstacle is seen a few centimetres to either side of the route in turn.
+    const double across = 0.04 * (tick % 3 - 1);
+    const auto result = controller.solve(pose, command, obstacle_costmap({{2.0, across}}));
+    ASSERT_TRUE(result);
+    if (result->goal_reached) {
+      break;
+    }
+    double widest = 0.0;
+    for (const auto & point : controller.detour()) {
+      widest = std::abs(point.y) > std::abs(widest) ? point.y : widest;
+    }
+    const int now = widest > 0.0 ? 1 : widest < 0.0 ? -1 : 0;
+    changes += side != 0 && now != 0 && now != side;
+    side = now != 0 ? now : side;
+    command = result->command;
+    pose = advance(pose, command, control_interval);
+  }
+  EXPECT_NE(side, 0);
+  EXPECT_EQ(changes, 0);
+  EXPECT_GT(pose.x, 4.8);
+}
+
+TEST(UnicycleMppi, PassesThroughAGapAndAroundOneThatIsTooNarrow)
+{
+  struct Case
+  {
+    double half_gap;
+    bool through;
+  };
+  for (const auto & [half_gap, through] : {Case{0.50, true}, Case{0.36, false}}) {
+    SCOPED_TRACE(half_gap);
+    MppiCore controller(Settings{});
+    const auto route = straight_route(5.0);
+    controller.set_route(route);
+    const std::vector<std::array<double, 2>> posts{{2.0, half_gap}, {2.0, -half_gap}};
+    const auto costmap = obstacle_costmap(posts);
+    Pose pose;
+    double closest = std::numeric_limits<double>::infinity(), widest = 0.0;
+    EXPECT_TRUE(drive(controller, pose, 120.0, costmap, [&](const Pose & at, const VOmega &) {
+        closest = std::min(closest, obstacle_distance(posts, at));
+        widest = std::max(widest, std::abs(at.y));
+      }));
+    EXPECT_GT(closest, lethal_distance);
+    if (through) {
+      EXPECT_LT(widest, 0.08);
+    } else {
+      EXPECT_GT(widest, half_gap + lethal_distance);
+    }
+  }
+}
+
+TEST(UnicycleMppi, StopsInFrontOfABlockedRouteAndFollowsItAsRecordedWithoutDetours)
+{
+  // A wall across the route, wider than the largest detour.
+  std::vector<std::array<double, 2>> wall;
+  for (int i = -60; i <= 60; ++i) {
+    wall.push_back({2.5, 0.05 * i});
+  }
+  const auto blocked = obstacle_costmap(wall);
+  Settings settings;
+  MppiCore controller(settings);
+  controller.set_route(straight_route(5.0));
+  Pose pose;
+  double closest = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(drive(controller, pose, 60.0, blocked, [&](const Pose & at, const VOmega &) {
+      closest = std::min(closest, obstacle_distance(wall, at));
+    }));
+  EXPECT_GT(closest, lethal_distance);
+  EXPECT_GT(pose.x, 1.5);
+  EXPECT_LT(std::abs(pose.y), 0.05);
+  EXPECT_FALSE(controller.solve(pose, {}, blocked));
+
+  // With detours switched off an obstacle on the route stops the robot as well.
+  settings.detour_range = 0.0;
+  MppiCore direct(settings);
+  direct.set_route(straight_route(5.0));
+  const auto post = obstacle_costmap({{2.0, 0.0}});
+  pose = {};
+  EXPECT_FALSE(drive(direct, pose, 60.0, post, [&](const Pose &, const VOmega &) {
+      EXPECT_TRUE(direct.detour().empty());
+    }));
+  EXPECT_LT(pose.x, 2.0);
+  EXPECT_LT(std::abs(pose.y), 0.2);
+}
+
+TEST(UnicycleMppi, IgnoresACostmapWithoutCostOnTheRoute)
+{
+  Settings settings;
+  settings.random_seed = 3;
+  MppiCore plain(settings), mapped(settings);
+  const std::vector<Pose> route{{}, {1.0, 0.0, 0.0}, {2.0, 0.6, 0.6}, {3.0, 0.6, 0.0}};
+  plain.set_route(route);
+  mapped.set_route(route);
+  // The obstacle stays outside the reach of its cost from the route.
+  const auto costmap = obstacle_costmap({{1.0, -0.8}});
+  Pose pose;
+  VOmega command;
+  for (int step = 0; step < 200; ++step) {
+    const auto a = plain.solve(pose, command, {});
+    const auto b = mapped.solve(pose, command, costmap);
+    ASSERT_TRUE(a && b);
+    ASSERT_EQ(a->command.v, b->command.v);
+    ASSERT_EQ(a->command.omega, b->command.omega);
+    EXPECT_TRUE(mapped.detour().empty());
+    command = a->command;
+    pose = advance(pose, command, control_interval);
+  }
 }
 
 TEST(UnicycleMppi, RepeatsTheCommandsForTheSameSeed)

@@ -10,9 +10,11 @@
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace mppi_unicycle
 {
@@ -52,6 +54,9 @@ inline Settings declare_settings(rclcpp::Node & node)
   settings.wheel_accel_limit = node.declare_parameter("wheel_accel_limit", settings.wheel_accel_limit);
   settings.wheel_decel_limit = node.declare_parameter("wheel_decel_limit", settings.wheel_decel_limit);
   settings.command_timeout = node.declare_parameter("command_timeout", settings.command_timeout);
+  settings.detour_range = node.declare_parameter("detour_range", settings.detour_range);
+  settings.detour_max_offset = node.declare_parameter(
+    "detour_max_offset", settings.detour_max_offset);
 
   auto pair = [&node](const std::string & name, std::array<double, 2> defaults) {
       const auto value = node.declare_parameter(name, std::vector<double>{defaults[0], defaults[1]});
@@ -78,6 +83,19 @@ inline double positive_parameter(rclcpp::Node & node, const std::string & name, 
     throw std::invalid_argument(name + " must be positive and finite");
   }
   return value;
+}
+
+// Distances along the body axis from the base frame to the points that are looked up in the
+// collision costmap. A costmap inflated for circles around these points covers a long body.
+inline std::vector<double> collision_offsets(rclcpp::Node & node)
+{
+  const auto offsets = node.declare_parameter("collision_offsets", std::vector<double>{0.0});
+  if (offsets.empty() || !std::all_of(offsets.begin(), offsets.end(),
+      [](double offset) {return std::isfinite(offset);}))
+  {
+    throw std::invalid_argument("collision_offsets must hold at least one finite distance");
+  }
+  return offsets;
 }
 
 inline std::optional<Pose> planar_pose(const geometry_msgs::msg::Pose & pose)
